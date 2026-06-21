@@ -1065,7 +1065,7 @@ export default function App() {
                 ))}
             </div>
             <div style={{ padding: 14, maxWidth: 640, margin: "0 auto" }}>
-                {mainTab === "new" && <NewTab onSave={saveInq} templates={templates} settings={settings} />}
+                {mainTab === "new" && <NewTab onSave={saveInq} onUpdate={updateInq} templates={templates} settings={settings} />}
                 {mainTab === "pending" && <PendingTab inquiries={pending} onUpdate={updateInq} settings={settings} />}
                 {mainTab === "log" && <LogTab inquiries={log60} onUpdate={updateInq} />}
                 {mainTab === "tpl" && <TplTab templates={templates} onSave={saveTpl} />}
@@ -1078,7 +1078,7 @@ export default function App() {
 // ══════════════════════════════════════════════════════
 // NEW ENQUIRY TAB
 // ══════════════════════════════════════════════════════
-function NewTab({ onSave, templates, settings }) {
+function NewTab({ onSave, onUpdate, templates, settings }) {
     const [step, setStep] = useState(1);
     const [branchId, setBranchId] = useState(settings.branches[0]?.id || "");
     const [workflow, setWorkflow] = useState("enquiry");
@@ -1092,6 +1092,10 @@ function NewTab({ onSave, templates, settings }) {
     const [editingIdx, setEditingIdx] = useState(null);
     const [saved, setSaved] = useState(false);
     const [copied, setCopied] = useState(null);
+    const [inqId, setInqId] = useState(null);
+    const [sentSteps, setSentSteps] = useState([]);
+    // sendState: { [index]: 'idle' | 'sending' | 'sent' | 'error' }
+    const [sendState, setSendState] = useState({});
 
     const branch = settings.branches.find((b) => b.id === branchId) || settings.branches[0];
     const branchSlots = branch?.slots || [];
@@ -1109,26 +1113,94 @@ function NewTab({ onSave, templates, settings }) {
     };
     const toggleSl = (id) => setSelected((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
+    const sendSms = async (i) => {
+        if (!settings.voodoo?.apiKey || !settings.voodoo?.senderName) {
+            alert("Add your Voodoo SMS API key and sender name in Settings first.");
+            return;
+        }
+        if (!phone) {
+            alert("No phone number logged for this enquiry — go back and add one.");
+            return;
+        }
+        setSendState((s) => ({ ...s, [i]: "sending" }));
+        try {
+            const res = await fetch("/api/send-sms", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    apiKey: settings.voodoo.apiKey,
+                    senderName: settings.voodoo.senderName,
+                    toNumber: phone,
+                    body: getMsg(i),
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.success) {
+                setSendState((s) => ({ ...s, [i]: "sent" }));
+                // Auto-mark this step as sent on the saved enquiry. Add `i`
+                // to the local list and persist via onUpdate so the Pending
+                // tab's "X/N messages sent" counter ticks up immediately.
+                if (inqId) {
+                    const next = sentSteps.includes(i)
+                        ? sentSteps
+                        : [...sentSteps, i].sort((a, b) => a - b);
+                    setSentSteps(next);
+                    await onUpdate(inqId, { sentSteps: next });
+                }
+            } else {
+                setSendState((s) => ({ ...s, [i]: "error" }));
+                alert("Send failed: " + (data.error || `HTTP ${res.status}`));
+            }
+        } catch (err) {
+            setSendState((s) => ({ ...s, [i]: "error" }));
+            alert("Network error: " + (err?.message || "unknown"));
+        }
+    };
+
     const doGenerate = async () => {
         const msgs = generateMsgs(workflow, { parentName, students, branchId, grandTotal, selectedSlots, payMethod }, templates, settings);
         setMessages(msgs);
         setEditedMsgs({});
         setEditingIdx(null);
         setStep(3);
-        await onSave({
-            id: uid(),
-            createdAt: new Date().toISOString(),
-            status: "pending",
-            branchId,
-            workflow,
-            parentName,
-            phone,
-            students,
-            grandTotal,
-            payMethod,
-            messages: msgs,
-            sentSteps: [],
-        });
+        // Filter local sentSteps to the new message length so stale
+        // indices from a previous generation don't leak through.
+        const validSent = sentSteps.filter((i) => i < msgs.length);
+        if (validSent.length !== sentSteps.length) setSentSteps(validSent);
+
+        if (inqId) {
+            // Regenerate — patch the existing enquiry in place so its
+            // sentSteps (and anything else) is preserved.
+            await onUpdate(inqId, {
+                messages: msgs,
+                branchId,
+                workflow,
+                parentName,
+                phone,
+                students,
+                grandTotal,
+                payMethod,
+                sentSteps: validSent,
+            });
+        } else {
+            // First generation — create the enquiry.
+            const id = uid();
+            setInqId(id);
+            await onSave({
+                id,
+                createdAt: new Date().toISOString(),
+                status: "pending",
+                branchId,
+                workflow,
+                parentName,
+                phone,
+                students,
+                grandTotal,
+                payMethod,
+                messages: msgs,
+                sentSteps: [],
+            });
+        }
         setSaved(true);
     };
 
@@ -1142,6 +1214,9 @@ function NewTab({ onSave, templates, settings }) {
         setStudents([blankStu()]);
         setSelected([]);
         setPayMethod("sumup");
+        setInqId(null);
+        setSentSteps([]);
+        setSendState({});
     };
 
     const needsPackages = workflow === "enquiry";
@@ -1504,6 +1579,28 @@ function NewTab({ onSave, templates, settings }) {
                         >
                             {copied === i ? "✓ Copied" : "Copy"}
                         </button>
+                        <button
+                            onClick={() => sendSms(i)}
+                            disabled={sendState[i] === "sending" || sentSteps.includes(i)}
+                            title={sentSteps.includes(i) ? "Already sent" : "Send this message via Voodoo SMS"}
+                            style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                border: "none",
+                                borderRadius: 6,
+                                padding: "3px 9px",
+                                cursor: sendState[i] === "sending" || sentSteps.includes(i) ? "default" : "pointer",
+                                background: sentSteps.includes(i) || sendState[i] === "sent" ? "#D1FAE5" : C.pink,
+                                color: sentSteps.includes(i) || sendState[i] === "sent" ? "#065F46" : "#fff",
+                                opacity: sendState[i] === "sending" ? 0.6 : 1,
+                            }}
+                        >
+                            {sendState[i] === "sending"
+                                ? "Sending…"
+                                : sentSteps.includes(i)
+                                ? "✓ Sent"
+                                : "Send SMS"}
+                        </button>
                     </div>
                 </div>
             ))}
@@ -1518,7 +1615,7 @@ function NewTab({ onSave, templates, settings }) {
                     marginBottom: 12,
                 }}
             >
-                ⚡ <strong>Phase 2:</strong> Add Twilio credentials in Settings to send these automatically.
+                💬 <strong>Send via Voodoo SMS:</strong> add your API key and sender name in Settings, then tap <em>Send SMS</em> on any message above. Sent steps are marked automatically.
             </div>
             <Btn variant="ghost" style={{ width: "100%", padding: 12, marginBottom: 8 }} onClick={doGenerate}>
                 ↺ Regenerate

@@ -46,11 +46,12 @@ Tutoring centres (e.g. Study Buddies) take dozens of new-enquiry phone calls a w
 
 Writing these by hand is slow, error-prone and inconsistent. NudgeHQ:
 
-- Captures the call details in a guided 3-step form
+- Captures the call details in a guided 3-step form (including whether the parent is **ready to proceed** or **"thinking about it"**)
 - Computes package pricing, **pro-rata** first payment and grand totals automatically
-- Generates the **correct, personalised message sequence** for the workflow the parent is in
+- Generates the **correct, personalised message sequence** for the workflow _and intent_ the parent is in — a softer **Nudge** sequence is used when they need more time
 - Lets staff **edit**, **copy** or **send via SMS** each step
 - Tracks which steps have been sent and nags staff to follow up
+- Lets staff **switch a "thinking" enquiry to "proceed"** later from the Pending tab, regenerating the payment message in place
 
 Each business gets its own deployment, configures its own branding/branches/packages/templates/SMS credentials, and optionally locks the app behind a PIN.
 
@@ -138,12 +139,14 @@ Helpers `sGet`/`sSet` (async wrappers around `localStorage.getItem`/`setItem` wi
 ```js
 {
   id, createdAt (ISO), status: "pending"|"enrolled"|"declined",
-  branchId, workflow, parentName, phone,
+  branchId, workflow, intent: "proceed"|"thinking", parentName, phone,
   students: [{ id, name, yearGroup, level, subjects[], pkg, joinDate,
                confirmedSlots[], slotsTBC }],
   grandTotal, payMethod, messages: [{step, timing, content}], sentSteps: [0,1,…]
 }
 ```
+
+`intent` records the parent's stance on the call. `"proceed"` runs the normal workflow; `"thinking"` swaps the generated sequence for the softer **Nudge** workflow (`n1`/`n2`/`n3`) and is the trigger for the Pending tab's **Switch Path** action.
 
 `sentSteps` is the array of message indexes that have been sent — used by the Pending tab to show "Step X of N sent" and decide what to nag about next.
 
@@ -197,16 +200,22 @@ This is the heart of the app: a 3-step guided form (`NewTab`).
     - 💷 Pricing & Timetable (1 message)
     - ℹ️ General Information (2 messages)
     - 🔔 Follow-up (3 messages)
+
+    > A 6th workflow — **Nudge** (3 messages) — is not selectable here; it is invoked automatically when the parent's response is "Thinking About It" (see below).
 - **Parent/Guardian** — Name + Mobile number, both voice-enabled (🎤). The phone field runs spoken numbers through `normalisePhone` (handles "double seven", "oh", "nought", formats 11-digit numbers as `XXXXX XXX XXXX`).
 - **Students** (hidden for `pricing`/`info` workflows) — one or more `StudentCard`s. Add sibling / remove. Each card captures:
     - Name (voice-enabled)
     - Level (Primary/Secondary toggle — swaps available subjects & year groups)
     - Year group dropdown
     - Subject chips (Primary: English, Maths — Secondary: + Science)
+- **Parent's Response** (shown for `enquiry`/`pricing`/`info` workflows) — a two-way toggle that sets the enquiry `intent`:
+    - ✓ **Ready to Proceed** — parent is keen; the selected workflow's normal sequence is generated.
+    - 💭 **Thinking About It** — parent needs time; `doGenerate` swaps the workflow for the softer **Nudge** sequence (`n1`/`n2`/`n3`) and Step 2 becomes optional.
 
 The primary button label adapts:
 
-- enquiry → "Next: Packages & Sessions →" (go to Step 2)
+- enquiry (proceed) → "Next: Packages & Sessions →" (go to Step 2)
+- enquiry (thinking) → "Next: Add Details (Optional) →" (go to Step 2, where details can be skipped)
 - pricing → "Next: Select Slots →" (go to Step 2)
 - trial/info/followup → "Generate Message →" (skip to Step 3)
 
@@ -226,6 +235,8 @@ For **pricing**:
 
 - **Slots to Include** — toggles for branch slots; leaving all off means the message shows the full timetable (`[SLOT_LIST]`).
 
+**When `intent === "thinking"`** (enquiry/pricing): a pink hint reminds staff that package/session details are optional — only fill them in if they were actually discussed on the call. A second **"Skip Details → Generate Without Package Info"** ghost button clears each student's `pkg`/`confirmedSlots`/`slotsTBC` and generates straight away, so the Nudge sequence can be sent with no package info attached.
+
 **Step 3 — Review, edit, send**
 
 - Summary header: workflow icon + label, branch, parent name, phone, "✓ Saved" badge.
@@ -240,14 +251,17 @@ For **pricing**:
 #### Generation flow (`doGenerate`)
 
 ```
+effectiveWorkflow = intent === "thinking" ? "nudge" : workflow
 formData = { parentName, students, branchId, grandTotal, selectedSlots, payMethod }
-msgs     = generateMsgs(workflow, formData, templates, settings)
-            ↳ computeVars(formData, settings)  → vars object (24 variables)
-            ↳ for each step in STEPS[workflow]:
+msgs     = generateMsgs(effectiveWorkflow, formData, templates, settings)
+            ↳ computeVars(formData, settings)  → vars object (27 variables)
+            ↳ for each step in STEPS[effectiveWorkflow]:
                  fillTemplate(templates[key] ?? DEFAULT_TPL[key], vars)
 ```
 
-If an enquiry `id` already exists (regenerate) it **patches** that enquiry, preserving `sentSteps` (filtered to the new message count so stale indices don't leak). If not, it **creates** a new enquiry with `status: "pending"`, fresh `sentSteps: []`, and stores it via `onSave`.
+The `intent` is saved on the enquiry record (so the Pending tab knows whether to offer a **Switch Path**).
+
+If an enquiry `id` already exists (regenerate) it **patches** that enquiry, preserving `sentSteps` (filtered to the new message count so stale indices don't leak) and persisting `intent`, `workflow`, `students`, `grandTotal` and `payMethod`. If not, it **creates** a new enquiry with `status: "pending"`, fresh `sentSteps: []`, and stores it via `onSave`.
 
 `fillTemplate` replaces every `[VAR]` with its value, leaving unknown `[VAR]`s intact so missing data is visible.
 
@@ -264,6 +278,7 @@ Each card shows:
 - A blue progress strip: **"Step X of N sent"** with the next step's label, or "All messages sent ✓". A **View/Hide** toggle expands the full message list with per-step checkboxes (manual mark-as-sent via `toggleSent`).
 - Student names + grand total
 - If ≥3 days have passed and not all steps are sent: an amber "⏰ consider sending step X+1" nudge.
+- **Switch Path** (only when `inq.intent === "thinking"`) — a pink **"↗ Parent wants to proceed — Switch Path"** button opens an inline panel where staff pick a package, session slot(s) and a payment method (Card/Bank) per student, then **"Generate Payment Message →"** runs `generateMsgs("enquiry", …)`, flips the enquiry's `intent` to `"proceed"`, resets `sentSteps` to `[]`, and overwrites `messages`/`students`/`grandTotal`/`payMethod` in place — turning a soft Nudge enquiry into a full onboarding sequence without re-keying the family's details.
 - **✓ Enrolled** / **✕ Declined** buttons to move the enquiry out of pending.
 
 Empty state: a green "✅ No pending enquiries" card.
@@ -280,13 +295,15 @@ A banner notes the Phase 2 plan: JotForms webhook will auto-flip status to Enrol
 
 ### Tab 4 — Templates
 
-`TplTab` lets the business customise every message template. Sections mirror the five workflows; each step has a label, timing hint, and a textarea seeded from `draft[key]`.
+`TplTab` lets the business customise every message template. Sections mirror the five selectable workflows; each step has a label, timing hint, and a textarea seeded from `draft[key]`.
 
-- **Variable Reference** collapsible lists all 24 `[VARS]` with descriptions (see [below](#8-template-variables-reference)).
+- **Variable Reference** collapsible lists all 27 `[VARS]` with descriptions (see [below](#8-template-variables-reference)).
 - **Save All Templates** persists `draft` to `nhq_tpl`.
 - **Reset** restores `DEFAULT_TPL` (without saving).
 
 Templates are merged at generate time: `templates[key] || DEFAULT_TPL[key]`, so a blanked-out field falls back to the default.
+
+> The **Nudge** workflow's `n1`/`n2`/`n3` templates ship in `DEFAULT_TPL` but are **not exposed** in the Templates tab editor (the workflow itself isn't user-selectable). They can still be overridden by editing `nhq_tpl` directly in localStorage if a business wants to customise the soft-follow-up copy.
 
 ---
 
@@ -341,14 +358,17 @@ Defined in `WF` and `STEPS`. Each step has a `key` (matches a template key), a h
 | `pricing`  | 💷   | p1 Pricing & Timetable                                                                          | p1             |
 | `info`     | ℹ️   | g1 About Us · g2 What We Provide                                                                | g1, g2         |
 | `followup` | 🔔   | f1 24hr · f2 48hr · f3 72hr Final (with STOP)                                                   | f1, f2, f3     |
+| `nudge`    | 💭   | n1 Initial (Thinking About It) · n2 Follow-up (no response) · n3 Final Message                  | n1, n2, n3     |
 
-Default templates are shipped in `DEFAULT_TPL` and can be overridden per-business via the Templates tab.
+`nudge` is not in the `WF` array (so it doesn't appear as a selectable card on Step 1). It is generated automatically by `doGenerate` whenever the parent's response is **"Thinking About It"** (`intent === "thinking"`), regardless of the workflow the staff member picked. Its three steps ease the parent in: a warm intro referencing any package discussed on the call, a 24hr follow-up, and a final 48–72hr message.
+
+Default templates are shipped in `DEFAULT_TPL` and can be overridden per-business via the Templates tab (the five selectable workflows) or localStorage (the Nudge workflow).
 
 ---
 
 ## 8. Template variables reference
 
-`computeVars(data, settings)` produces the 24 variables below. All are replaced in templates via `[VAR_NAME]`.
+`computeVars(data, settings)` produces the 27 variables below. All are replaced in templates via `[VAR_NAME]`.
 
 | Variable               | Meaning                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
@@ -361,6 +381,9 @@ Default templates are shipped in `DEFAULT_TPL` and can be overridden per-busines
 | `[STUDENT_POSSESSIVE]` | "Zaynab's" for one, "your children's" for multiple                |
 | `[SESSION_LINES]`      | Confirmed slots per student (Step 1)                              |
 | `[SESSION_SUMMARY]`    | Class details — omits the name when there's a single student      |
+| `[CALENDLY_LINE]`      | Full Calendly trial line — only appears if a Calendly link is set for that branch (empty otherwise) |
+| `[CALENDLY_SHORT_LINE]`| Short Calendly append (" Or book a free trial: …") — only appears if Calendly is set; used inline in n2 |
+| `[PACKAGE_DISCUSSED_LINE]` | Package(s) discussed on the call — single-line for one student, bulleted list for several; **blank if no package was selected** (used by the Nudge n1 message) |
 | `[WEEKLY_SESSIONS]`    | Weekly sessions per student                                       |
 | `[PACKAGE_LINES]`      | Package per student (`2hrs/week — £100/month`)                    |
 | `[FIRST_PAYMENT]`      | Total first payment (reg fee + pro-rata, all students)            |
@@ -383,6 +406,8 @@ Smart details:
 - `[PAYMENT_LINE]` is **either** the SumUp link **or** the full bank block (Sort/Acc/Ref), never both — chosen by the `payMethod` selection in Step 2.
 - `[SLOT_LIST]` uses the explicitly selected slots from the pricing workflow, or falls back to the branch's full timetable if none were toggled on.
 - `[BANK_REF]` is built as `"<SURNAME> + your child's date of birth (DDMMYY)"`.
+- `[CALENDLY_LINE]` / `[CALENDLY_SHORT_LINE]` resolve to an empty string when the branch has no `calendlyLink`, so the Nudge messages read naturally with or without a trial link configured.
+- `[PACKAGE_DISCUSSED_LINE]` is empty when none of the students have a `pkg` set (e.g. the parent was "thinking about it" and no package was agreed on the call), so n1 never references a package that wasn't actually discussed.
 
 ---
 

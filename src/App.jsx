@@ -68,6 +68,11 @@ const STEPS = {
         { key: "f2", label: "48hr Follow-up", timing: "After 48 hours" },
         { key: "f3", label: "72hr Final Message", timing: "After 72 hours — last contact" },
     ],
+    nudge: [
+        { key: "n1", label: "Initial Message — Thinking About It", timing: "Send immediately after call, or within 24hrs" },
+        { key: "n2", label: "Follow-up — No Response", timing: "24 hours after n1 if no response" },
+        { key: "n3", label: "Final Message", timing: "48-72 hours after n2 — last contact" },
+    ],
 };
 
 const VARS = [
@@ -80,6 +85,9 @@ const VARS = [
     { v: "[STUDENT_POSSESSIVE]", d: "Possessive: Zaynab's or your children's" },
     { v: "[SESSION_LINES]", d: "Confirmed slots per student (Step 1)" },
     { v: "[SESSION_SUMMARY]", d: "Class details — no name for single student" },
+    { v: "[CALENDLY_LINE]", d: "Full Calendly line — only appears if Calendly is set up for that branch" },
+    { v: "[CALENDLY_SHORT_LINE]", d: "Short Calendly append — only appears if Calendly set up" },
+    { v: "[PACKAGE_DISCUSSED_LINE]", d: "Package discussed on call — blank if nothing selected" },
     { v: "[WEEKLY_SESSIONS]", d: "Weekly sessions per student" },
     { v: "[PACKAGE_LINES]", d: "Package per student" },
     { v: "[FIRST_PAYMENT]", d: "Total first payment" },
@@ -177,6 +185,16 @@ Qs: [GENERAL_PHONE] | [BRANCH_PHONE] (opening hrs)
     f2: `Hi [PARENT_NAME], spaces at [BUSINESS_NAME] [BRANCH] filling up. Confirm [STUDENT_NAMES]'s place now: [GENERAL_PHONE] [BUSINESS_NAME] [BRANCH] 📚`,
 
     f3: `Final message re [STUDENT_NAMES] — [BUSINESS_NAME] [BRANCH]. To proceed: [GENERAL_PHONE]. To unsubscribe: reply STOP.`,
+
+    n1: `Hi [PARENT_NAME], thanks for calling [BUSINESS_NAME] [BRANCH]! We\'d love to support [STUDENT_NAMES].[PACKAGE_DISCUSSED_LINE]
+
+[CALENDLY_LINE]Call us on [GENERAL_PHONE] if you have any questions or would like more information.
+[BUSINESS_NAME] [BRANCH] 📚`,
+
+    n2: `Hi [PARENT_NAME], just following up on your recent enquiry about [BUSINESS_NAME] [BRANCH]. We still have spaces available and would love to get [STUDENT_NAMES] started. If you have any questions at all, please don\'t hesitate to call us on [GENERAL_PHONE].[CALENDLY_SHORT_LINE]
+[BUSINESS_NAME] [BRANCH] 📚`,
+
+    n3: `Hi [PARENT_NAME], just a final reminder about [STUDENT_NAMES]\'s place at [BUSINESS_NAME] [BRANCH]. We\'d still love to welcome them — if you\'d like to go ahead or have any questions, please give us a call on [GENERAL_PHONE]. Wishing you and your family all the best. [BUSINESS_NAME] [BRANCH] 📚`,
 };
 
 // ══════════════════════════════════════════════════════
@@ -339,6 +357,27 @@ function computeVars(data, settings) {
                 : "Card payment — link to be provided"
             : `Bank transfer:\n${settings.bankName} | Sort: ${branch.bankSort} | Acc: ${branch.bankAcct}\nRef: ${bankRef}`;
 
+    // Thinking About It specific variables
+    const calendlyLine = branch.calendlyLink ? `Why not book a free trial: ${branch.calendlyLink}\n` : "";
+    const calendlyShortLine = branch.calendlyLink ? ` Or book a free trial: ${branch.calendlyLink}` : "";
+    const pkgDiscussed = stuArr.filter((s) => s.pkg);
+    const pkgDiscussedLine =
+        pkgDiscussed.length === 0
+            ? ""
+            : pkgDiscussed.length === 1
+              ? (() => {
+                    const p = settings.packages.find((x) => x.id === pkgDiscussed[0].pkg);
+                    return p ? `\n\nWe discussed the ${p.hours}hrs/week package at £${p.monthly}/month.` : "";
+                })()
+              : "\n\nWe discussed:\n" +
+                pkgDiscussed
+                    .map((s) => {
+                        const p = settings.packages.find((x) => x.id === s.pkg);
+                        return p ? `• ${s.name || "Student"}: ${p.hours}hrs/week at £${p.monthly}/month` : "";
+                    })
+                    .filter(Boolean)
+                    .join("\n");
+
     return {
         PARENT_NAME: parentName || "there",
         BRANCH: branch.name,
@@ -364,11 +403,14 @@ function computeVars(data, settings) {
         SLOT_LIST: slotSource.join("\n"),
         SURNAME: surname,
         REG_FEE: String(settings.regFee),
+        CALENDLY_LINE: calendlyLine,
+        CALENDLY_SHORT_LINE: calendlyShortLine,
+        PACKAGE_DISCUSSED_LINE: pkgDiscussedLine,
     };
 }
 
 function fillTemplate(template, vars) {
-    return Object.entries(vars).reduce((t, [k, v]) => t.replace(new RegExp(`\\[${k}\\]`, "g"), v || `[${k}]`), template || "");
+    return Object.entries(vars).reduce((t, [k, v]) => t.replace(new RegExp(`\\[${k}\\]`, "g"), v != null ? v : `[${k}]`), template || "");
 }
 function generateMsgs(workflow, formData, templates, settings) {
     const vars = computeVars(formData, settings);
@@ -1066,7 +1108,7 @@ export default function App() {
             </div>
             <div style={{ padding: 14, maxWidth: 640, margin: "0 auto" }}>
                 {mainTab === "new" && <NewTab onSave={saveInq} onUpdate={updateInq} templates={templates} settings={settings} />}
-                {mainTab === "pending" && <PendingTab inquiries={pending} onUpdate={updateInq} settings={settings} />}
+                {mainTab === "pending" && <PendingTab inquiries={pending} onUpdate={updateInq} settings={settings} templates={templates} />}
                 {mainTab === "log" && <LogTab inquiries={log60} onUpdate={updateInq} />}
                 {mainTab === "tpl" && <TplTab templates={templates} onSave={saveTpl} />}
                 {mainTab === "settings" && <SettingsTab settings={settings} onSave={saveSettings} />}
@@ -1096,6 +1138,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
     const [sentSteps, setSentSteps] = useState([]);
     // sendState: { [index]: 'idle' | 'sending' | 'sent' | 'error' }
     const [sendState, setSendState] = useState({});
+    const [intent, setIntent] = useState("proceed"); // "proceed" | "thinking"
 
     const branch = settings.branches.find((b) => b.id === branchId) || settings.branches[0];
     const branchSlots = branch?.slots || [];
@@ -1141,9 +1184,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 // to the local list and persist via onUpdate so the Pending
                 // tab's "X/N messages sent" counter ticks up immediately.
                 if (inqId) {
-                    const next = sentSteps.includes(i)
-                        ? sentSteps
-                        : [...sentSteps, i].sort((a, b) => a - b);
+                    const next = sentSteps.includes(i) ? sentSteps : [...sentSteps, i].sort((a, b) => a - b);
                     setSentSteps(next);
                     await onUpdate(inqId, { sentSteps: next });
                 }
@@ -1158,7 +1199,13 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
     };
 
     const doGenerate = async () => {
-        const msgs = generateMsgs(workflow, { parentName, students, branchId, grandTotal, selectedSlots, payMethod }, templates, settings);
+        const effectiveWorkflow = intent === "thinking" ? "nudge" : workflow;
+        const msgs = generateMsgs(
+            effectiveWorkflow,
+            { parentName, students, branchId, grandTotal, selectedSlots, payMethod },
+            templates,
+            settings,
+        );
         setMessages(msgs);
         setEditedMsgs({});
         setEditingIdx(null);
@@ -1175,6 +1222,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 messages: msgs,
                 branchId,
                 workflow,
+                intent,
                 parentName,
                 phone,
                 students,
@@ -1192,6 +1240,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 status: "pending",
                 branchId,
                 workflow,
+                intent,
                 parentName,
                 phone,
                 students,
@@ -1214,6 +1263,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
         setStudents([blankStu()]);
         setSelected([]);
         setPayMethod("sumup");
+        setIntent("proceed");
         setInqId(null);
         setSentSteps([]);
         setSendState({});
@@ -1326,8 +1376,58 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                         ))}
                     </Card>
                 )}
+                {["enquiry", "pricing", "info"].includes(workflow) && (
+                    <Card>
+                        <ST>Parent's Response</ST>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <button
+                                onClick={() => setIntent("proceed")}
+                                style={{
+                                    flex: 1,
+                                    padding: "11px 8px",
+                                    borderRadius: 8,
+                                    border: "none",
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    background: intent === "proceed" ? C.navy : C.tag,
+                                    color: intent === "proceed" ? "#fff" : C.muted,
+                                }}
+                            >
+                                ✓ Ready to Proceed
+                            </button>
+                            <button
+                                onClick={() => setIntent("thinking")}
+                                style={{
+                                    flex: 1,
+                                    padding: "11px 8px",
+                                    borderRadius: 8,
+                                    border: "none",
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    background: intent === "thinking" ? C.pink : C.tag,
+                                    color: intent === "thinking" ? "#fff" : C.muted,
+                                }}
+                            >
+                                💭 Thinking About It
+                            </button>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.muted }}>
+                            {intent === "proceed"
+                                ? "Parent is ready — payment message sent immediately."
+                                : "Parent needs time — softer message sent, follow-ups automated."}
+                        </div>
+                    </Card>
+                )}
                 <Btn style={{ width: "100%", padding: 13 }} onClick={() => (needsStep2 ? setStep(2) : doGenerate())}>
-                    {needsPackages ? "Next: Packages & Sessions →" : needsSlots ? "Next: Select Slots →" : "Generate Message →"}
+                    {needsPackages && intent === "thinking"
+                        ? "Next: Add Details (Optional) →"
+                        : needsPackages
+                          ? "Next: Packages & Sessions →"
+                          : needsSlots
+                            ? "Next: Select Slots →"
+                            : "Generate Message →"}
                 </Btn>
             </>
         );
@@ -1464,9 +1564,36 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                         })}
                     </Card>
                 )}
+                {intent === "thinking" && (
+                    <div
+                        style={{
+                            background: "#EEF2FA",
+                            borderRadius: 8,
+                            padding: "10px 12px",
+                            marginBottom: 8,
+                            fontSize: 12,
+                            color: C.navy,
+                        }}
+                    >
+                        💭 <strong>Thinking About It path.</strong> Only fill in package and session details if they were discussed on the
+                        call. Skip if nothing was confirmed.
+                    </div>
+                )}
                 <Btn variant="pink" style={{ width: "100%", padding: 13 }} onClick={doGenerate}>
                     Generate Messages →
                 </Btn>
+                {intent === "thinking" && (
+                    <Btn
+                        variant="ghost"
+                        style={{ width: "100%", padding: 11, marginTop: 8 }}
+                        onClick={() => {
+                            setStudents((s) => s.map((x) => ({ ...x, pkg: null, confirmedSlots: [], slotsTBC: false })));
+                            doGenerate();
+                        }}
+                    >
+                        Skip Details → Generate Without Package Info
+                    </Btn>
+                )}
                 <Btn variant="ghost" style={{ width: "100%", padding: 11, marginTop: 8 }} onClick={() => setStep(1)}>
                     ← Back
                 </Btn>
@@ -1595,11 +1722,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                                 opacity: sendState[i] === "sending" ? 0.6 : 1,
                             }}
                         >
-                            {sendState[i] === "sending"
-                                ? "Sending…"
-                                : sentSteps.includes(i)
-                                ? "✓ Sent"
-                                : "Send SMS"}
+                            {sendState[i] === "sending" ? "Sending…" : sentSteps.includes(i) ? "✓ Sent" : "Send SMS"}
                         </button>
                     </div>
                 </div>
@@ -1615,7 +1738,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                     marginBottom: 12,
                 }}
             >
-                💬 <strong>Send via Voodoo SMS:</strong> add your API key and sender name in Settings, then tap <em>Send SMS</em> on any message above. Sent steps are marked automatically.
+                💬 <strong>Send via Voodoo SMS:</strong> add your API key and sender name in Settings, then tap <em>Send SMS</em> on any
+                message above. Sent steps are marked automatically.
             </div>
             <Btn variant="ghost" style={{ width: "100%", padding: 12, marginBottom: 8 }} onClick={doGenerate}>
                 ↺ Regenerate
@@ -1633,8 +1757,51 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
 // ══════════════════════════════════════════════════════
 // PENDING TAB
 // ══════════════════════════════════════════════════════
-function PendingTab({ inquiries, onUpdate, settings }) {
+function PendingTab({ inquiries, onUpdate, settings, templates }) {
     const [expanded, setExpanded] = useState({});
+    const [switchingId, setSwitchingId] = useState(null);
+    const [switchData, setSwitchData] = useState({});
+
+    const openSwitch = (inq) => {
+        setSwitchingId(inq.id);
+        setSwitchData({
+            students: (inq.students || []).map((s) => ({ ...s, pkg: null, confirmedSlots: [], slotsTBC: false })),
+            payMethod: "sumup",
+        });
+        setExpanded((e) => ({ ...e, [inq.id]: false }));
+    };
+
+    const doSwitch = async (inq) => {
+        const branch = settings.branches.find((b) => b.id === inq.branchId) || settings.branches[0];
+        const updStudents = switchData.students || [];
+        const grandTotal = updStudents.reduce((s, st) => {
+            const c = stuCalc(st, settings);
+            return c ? s + c.total : s;
+        }, 0);
+        const msgs = generateMsgs(
+            "enquiry",
+            {
+                parentName: inq.parentName,
+                students: updStudents,
+                branchId: inq.branchId,
+                grandTotal,
+                selectedSlots: [],
+                payMethod: switchData.payMethod || "sumup",
+            },
+            templates || DEFAULT_TPL,
+            settings,
+        );
+        await onUpdate(inq.id, {
+            intent: "proceed",
+            messages: msgs,
+            sentSteps: [],
+            students: updStudents,
+            grandTotal,
+            payMethod: switchData.payMethod || "sumup",
+        });
+        setSwitchingId(null);
+        setSwitchData({});
+    };
     const sorted = [...inquiries].sort((a, b) => daysSince(b.createdAt) - daysSince(a.createdAt));
     const toggleSent = async (inq, idx) => {
         const cur = inq.sentSteps || [];
@@ -1776,6 +1943,169 @@ function PendingTab({ inquiries, onUpdate, settings }) {
                                 }}
                             >
                                 ⏰ {days} days — consider sending step {stage + 1}.
+                            </div>
+                        )}
+                        {inq.intent === "thinking" && switchingId !== inq.id && (
+                            <div style={{ marginBottom: 8 }}>
+                                <Btn
+                                    variant="ghost"
+                                    style={{
+                                        width: "100%",
+                                        fontSize: 12,
+                                        padding: 8,
+                                        border: `1px solid ${C.pink}`,
+                                        color: C.pink,
+                                        background: "#FDF2F8",
+                                    }}
+                                    onClick={() => openSwitch(inq)}
+                                >
+                                    ↗ Parent wants to proceed — Switch Path
+                                </Btn>
+                            </div>
+                        )}
+                        {switchingId === inq.id && (
+                            <div
+                                style={{
+                                    border: `2px solid ${C.pink}`,
+                                    borderRadius: 10,
+                                    padding: 12,
+                                    marginBottom: 10,
+                                    background: "#FDF2F8",
+                                }}
+                            >
+                                <div style={{ fontSize: 12, fontWeight: 700, color: C.pink, marginBottom: 10 }}>
+                                    ↗ Switching to Proceed — confirm details
+                                </div>
+                                <div style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>
+                                    Select package and sessions for each student, then generate the payment message.
+                                </div>
+                                {(switchData.students || []).map((s, si) => {
+                                    const branchObj = settings.branches.find((b) => b.id === inq.branchId) || settings.branches[0];
+                                    return (
+                                        <div
+                                            key={s.id}
+                                            style={{
+                                                border: `1px solid ${C.border}`,
+                                                borderRadius: 8,
+                                                padding: 10,
+                                                marginBottom: 8,
+                                                background: C.white,
+                                            }}
+                                        >
+                                            <div style={{ fontSize: 12, fontWeight: 700, color: C.navy, marginBottom: 8 }}>
+                                                {s.name || `Student ${si + 1}`}
+                                            </div>
+                                            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Package</div>
+                                            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                                                {settings.packages.map((p) => (
+                                                    <button
+                                                        key={p.id}
+                                                        onClick={() =>
+                                                            setSwitchData((d) => ({
+                                                                ...d,
+                                                                students: d.students.map((x, xi) => (xi === si ? { ...x, pkg: p.id } : x)),
+                                                            }))
+                                                        }
+                                                        style={{
+                                                            flex: 1,
+                                                            minWidth: 60,
+                                                            padding: "7px 4px",
+                                                            borderRadius: 8,
+                                                            border: "none",
+                                                            cursor: "pointer",
+                                                            textAlign: "center",
+                                                            fontSize: 11,
+                                                            fontWeight: 700,
+                                                            background: s.pkg === p.id ? C.navy : C.tag,
+                                                            color: s.pkg === p.id ? "#fff" : C.text,
+                                                        }}
+                                                    >
+                                                        {p.hours}h/wk
+                                                        <br />
+                                                        <span style={{ fontWeight: 400 }}>£{p.monthly}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Session Slot</div>
+                                            {(branchObj?.slots || []).map((slot) => {
+                                                const on = (s.confirmedSlots || []).includes(slot.id);
+                                                return (
+                                                    <div
+                                                        key={slot.id}
+                                                        onClick={() =>
+                                                            setSwitchData((d) => ({
+                                                                ...d,
+                                                                students: d.students.map((x, xi) =>
+                                                                    xi === si
+                                                                        ? {
+                                                                              ...x,
+                                                                              confirmedSlots: on
+                                                                                  ? x.confirmedSlots.filter((c) => c !== slot.id)
+                                                                                  : [...(x.confirmedSlots || []), slot.id],
+                                                                          }
+                                                                        : x,
+                                                                ),
+                                                            }))
+                                                        }
+                                                        style={{
+                                                            display: "flex",
+                                                            justifyContent: "space-between",
+                                                            alignItems: "center",
+                                                            padding: "6px 0",
+                                                            borderBottom: `1px solid ${C.bg}`,
+                                                            cursor: "pointer",
+                                                            opacity: on ? 1 : 0.45,
+                                                        }}
+                                                    >
+                                                        <span style={{ fontSize: 12, color: on ? C.text : C.muted }}>
+                                                            {slot.day} {slot.time}
+                                                        </span>
+                                                        <Toggle on={on} onToggle={() => {}} />
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    );
+                                })}
+                                <div style={{ marginBottom: 10 }}>
+                                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Payment Method</div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        {["sumup", "bank"].map((m) => (
+                                            <button
+                                                key={m}
+                                                onClick={() => setSwitchData((d) => ({ ...d, payMethod: m }))}
+                                                style={{
+                                                    flex: 1,
+                                                    padding: "8px 4px",
+                                                    borderRadius: 8,
+                                                    border: "none",
+                                                    cursor: "pointer",
+                                                    fontSize: 11,
+                                                    fontWeight: 700,
+                                                    background: switchData.payMethod === m ? C.pink : C.tag,
+                                                    color: switchData.payMethod === m ? "#fff" : C.muted,
+                                                }}
+                                            >
+                                                {m === "sumup" ? "Card (SumUp)" : "Bank Transfer"}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                    <Btn variant="pink" style={{ flex: 1, fontSize: 12, padding: 8 }} onClick={() => doSwitch(inq)}>
+                                        Generate Payment Message →
+                                    </Btn>
+                                    <Btn
+                                        variant="ghost"
+                                        style={{ fontSize: 12, padding: 8 }}
+                                        onClick={() => {
+                                            setSwitchingId(null);
+                                            setSwitchData({});
+                                        }}
+                                    >
+                                        Cancel
+                                    </Btn>
+                                </div>
                             </div>
                         )}
                         <div style={{ display: "flex", gap: 8 }}>

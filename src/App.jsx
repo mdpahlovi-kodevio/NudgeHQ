@@ -41,11 +41,12 @@ const DEFAULT_SETTINGS = {
 // ══════════════════════════════════════════════════════
 const WF = [
     { id: "enquiry", icon: "👋", label: "New Enquiry", desc: "Full onboarding — 4 messages" },
-    { id: "trial", icon: "📅", label: "Trial Session", desc: "1-hour free trial — 2 messages" },
+    { id: "trial", icon: "📅", label: "Trial Session", desc: "1-hour free trial — 3 messages" },
     { id: "pricing", icon: "💷", label: "Pricing & Timetable", desc: "Info pack — 1 message" },
     { id: "info", icon: "ℹ️", label: "General Information", desc: "About us — 2 messages" },
     { id: "followup", icon: "🔔", label: "Follow-up", desc: "Chase no-response — 3 messages" },
-    { id: "nudge", icon: "💭", label: "Nudge (Thinking About It)", desc: "Soft follow-up — 3 messages" },
+    // NOTE: 'nudge' workflow is triggered internally (intent === "thinking"),
+    // so it is intentionally NOT listed here as a selectable option.
 ];
 
 const STEPS = {
@@ -57,6 +58,7 @@ const STEPS = {
     ],
     trial: [
         { key: "t1", label: "Trial Invitation", timing: "Send immediately" },
+        { key: "t3", label: "Booking Confirmation", timing: "When parent confirms their booking" },
         { key: "t2", label: "Day-Before Reminder", timing: "Evening before their trial" },
     ],
     pricing: [{ key: "p1", label: "Pricing & Timetable", timing: "Send immediately" }],
@@ -149,6 +151,8 @@ Any questions: [BRANCH_PHONE] | [GENERAL_PHONE]
 [CALENDLY_LINK]
 Qs: [GENERAL_PHONE] | [BRANCH_PHONE] (opening hrs)
 [BUSINESS_NAME] [BRANCH] 📚`,
+
+    t3: `Hi [PARENT_NAME], great news — [STUDENT_NAMES]'s free trial at [BUSINESS_NAME] [BRANCH] is confirmed! We look forward to welcoming them. If you have any questions beforehand please call us on [GENERAL_PHONE] or [BRANCH_PHONE]. See you soon! [BUSINESS_NAME] [BRANCH] 📚`,
 
     t2: `Hi [PARENT_NAME], reminder: [STUDENT_NAMES]'s trial is tomorrow at [BUSINESS_NAME] [BRANCH].
 Any questions: [BRANCH_PHONE] | [GENERAL_PHONE]

@@ -194,14 +194,15 @@ This is the heart of the app: a 3-step guided form (`NewTab`).
 **Step 1 — Capture the call**
 
 - **Branch selector** — pill buttons for each branch in settings.
-- **Workflow selector** — 5 cards (see [Workflows](#7-workflows--message-sequences)):
+- **Workflow selector** — 6 cards (see [Workflows](#7-workflows--message-sequences)):
     - 👋 New Enquiry (4 messages, full onboarding)
     - 📅 Trial Session (2 messages)
     - 💷 Pricing & Timetable (1 message)
     - ℹ️ General Information (2 messages)
     - 🔔 Follow-up (3 messages)
+    - 💭 Nudge — Thinking About It (3 messages)
 
-    > A 6th workflow — **Nudge** (3 messages) — is not selectable here; it is invoked automatically when the parent's response is "Thinking About It" (see below).
+    The **Nudge** workflow can be picked directly here **or** invoked automatically when the parent's response is "Thinking About It" (see below).
 - **Parent/Guardian** — Name + Mobile number, both voice-enabled (🎤). The phone field runs spoken numbers through `normalisePhone` (handles "double seven", "oh", "nought", formats 11-digit numbers as `XXXXX XXX XXXX`).
 - **Students** (hidden for `pricing`/`info` workflows) — one or more `StudentCard`s. Add sibling / remove. Each card captures:
     - Name (voice-enabled)
@@ -217,7 +218,7 @@ The primary button label adapts:
 - enquiry (proceed) → "Next: Packages & Sessions →" (go to Step 2)
 - enquiry (thinking) → "Next: Add Details (Optional) →" (go to Step 2, where details can be skipped)
 - pricing → "Next: Select Slots →" (go to Step 2)
-- trial/info/followup → "Generate Message →" (skip to Step 3)
+- trial/info/followup/nudge → "Generate Message →" (skip to Step 3)
 
 **Step 2 — Packages & sessions** (enquiry + pricing only)
 
@@ -295,7 +296,7 @@ A banner notes the Phase 2 plan: JotForms webhook will auto-flip status to Enrol
 
 ### Tab 4 — Templates
 
-`TplTab` lets the business customise every message template. Sections mirror the five selectable workflows; each step has a label, timing hint, and a textarea seeded from `draft[key]`.
+`TplTab` lets the business customise every message template. Sections mirror the selectable workflows; each step has a label, timing hint, and a textarea seeded from `draft[key]`.
 
 - **Variable Reference** collapsible lists all 27 `[VARS]` with descriptions (see [below](#8-template-variables-reference)).
 - **Save All Templates** persists `draft` to `nhq_tpl`.
@@ -303,7 +304,7 @@ A banner notes the Phase 2 plan: JotForms webhook will auto-flip status to Enrol
 
 Templates are merged at generate time: `templates[key] || DEFAULT_TPL[key]`, so a blanked-out field falls back to the default.
 
-> The **Nudge** workflow's `n1`/`n2`/`n3` templates ship in `DEFAULT_TPL` but are **not exposed** in the Templates tab editor (the workflow itself isn't user-selectable). They can still be overridden by editing `nhq_tpl` directly in localStorage if a business wants to customise the soft-follow-up copy.
+> The **Nudge** `n1`/`n2`/`n3` templates ship in `DEFAULT_TPL`. They aren't currently listed in the Templates-tab editor's sections (which only cover the five `WF`-derived sections), so to customise the Nudge copy a business edits `nhq_tpl` directly in localStorage.
 
 ---
 
@@ -333,17 +334,23 @@ In Step 3 of the New tab, each message card has a **Send SMS** button (`sendSms`
 1. Guard: Voodoo API key + sender name must be set in Settings; phone must be present.
 2. Set `sendState[i] = "sending"` (button greys out, shows "Sending…").
 3. `POST /api/send-sms` with `{ apiKey, senderName, toNumber: phone, body: getMsg(i) }`.
-4. On `data.success`: `sendState[i] = "sent"`, push `i` into `sentSteps`, and `onUpdate(inqId, { sentSteps })` so the Pending counter ticks up immediately and persists.
-5. On failure: `sendState[i] = "error"` + an alert with the error message.
+4. On `data.success`: `sendState[i] = "sent"`, push `i` into `sentSteps`, and `onUpdate(inqId, { sentSteps })` so the Pending counter ticks up immediately and persists. The button becomes a green **"✓ Sent · Resend"** — it is **not disabled**, so staff can tap it again to re-send the same message if it didn't arrive.
+5. On failure: `sendState[i] = "error"`, the button turns red and reads **"↻ Retry Send"**, and an alert shows the **real Voodoo error message** (e.g. `[14] Cannot send to this country`, `[26] Invalid Sender ID`, insufficient credits) with a reminder that they can retry. The button stays clickable so the send can be attempted again immediately.
+
+> The send button is only disabled while a request is in flight (`sendState === "sending"`). It is never locked by `sentSteps` — so a message can always be resent or retried. This fixes the earlier "turns green and can't be re-sent" glitch.
 
 The serverless function (`api/send-sms.js`):
 
-- Validates required fields
-- Normalises the UK number to international format (`07…` → `44…`)
-- Sanitises the sender name (alphanumeric, ≤11 chars)
-- Truncates body to 1600 chars (Voodoo concatenates long messages)
-- Calls `POST https://api.voodoosms.com/sendsms` with `Bearer` auth
-- Returns `{ success, messageId, status }` or a descriptive error
+- Validates required fields.
+- **Strictly normalises the UK mobile number** to international format `44XXXXXXXXXX` (handles `07…`, `+44…`, `44…`, `0044…`, and mobile-without-leading-`0` `7…`). Rejects anything that isn't a valid 12-digit UK mobile with a clear message, so a mistyped number fails fast instead of silently going nowhere.
+- Sanitises the sender name (alphanumeric + spaces, ≤11 chars).
+- Truncates body to 1600 chars (Voodoo concatenates long messages). Emoji and UTF-8 content pass through unchanged — the browser sends proper UTF-8 JSON, which Voodoo preserves.
+- Calls `POST https://api.voodoosms.com/sendsms` with `Bearer` auth.
+- **Parses Voodoo's response defensively** (text-first, then `JSON.parse`) so a non-JSON gateway error (502 HTML etc.) is reported cleanly instead of crashing.
+- **Extracts errors from Voodoo's actual shape** `{ error: { code, msg } }` (with fallbacks for legacy `{ message }` / string `error`) and returns them prefixed with the code, e.g. `[14] Cannot send to this country`. This is why the client now sees the real reason instead of `[object Object]`.
+- Reads success info from `data.messages[0]` (`id` / `status`) and also returns `balance` / `credits`.
+- Treats an explicit failure status inside a 200 (e.g. `REJECTED`) as an error.
+- Returns `{ success, messageId, status, balance, credits }` or a descriptive error.
 
 ---
 
@@ -360,9 +367,9 @@ Defined in `WF` and `STEPS`. Each step has a `key` (matches a template key), a h
 | `followup` | 🔔   | f1 24hr · f2 48hr · f3 72hr Final (with STOP)                                                   | f1, f2, f3     |
 | `nudge`    | 💭   | n1 Initial (Thinking About It) · n2 Follow-up (no response) · n3 Final Message                  | n1, n2, n3     |
 
-`nudge` is not in the `WF` array (so it doesn't appear as a selectable card on Step 1). It is generated automatically by `doGenerate` whenever the parent's response is **"Thinking About It"** (`intent === "thinking"`), regardless of the workflow the staff member picked. Its three steps ease the parent in: a warm intro referencing any package discussed on the call, a 24hr follow-up, and a final 48–72hr message.
+`nudge` is in the `WF` array and appears as a selectable card on Step 1 (💭 "Nudge — Thinking About It"). It is also generated automatically by `doGenerate` whenever the parent's response is **"Thinking About It"** (`intent === "thinking"`), regardless of the workflow the staff member picked. Its three steps ease the parent in: a warm intro referencing any package discussed on the call, a 24hr follow-up, and a final 48–72hr message.
 
-Default templates are shipped in `DEFAULT_TPL` and can be overridden per-business via the Templates tab (the five selectable workflows) or localStorage (the Nudge workflow).
+Default templates are shipped in `DEFAULT_TPL` and can be overridden per-business via the Templates tab (all six workflows, including Nudge) or localStorage.
 
 ---
 

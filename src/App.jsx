@@ -45,6 +45,7 @@ const WF = [
     { id: "pricing", icon: "💷", label: "Pricing & Timetable", desc: "Info pack — 1 message" },
     { id: "info", icon: "ℹ️", label: "General Information", desc: "About us — 2 messages" },
     { id: "followup", icon: "🔔", label: "Follow-up", desc: "Chase no-response — 3 messages" },
+    { id: "nudge", icon: "💭", label: "Nudge (Thinking About It)", desc: "Soft follow-up — 3 messages" },
 ];
 
 const STEPS = {
@@ -1190,11 +1191,12 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 }
             } else {
                 setSendState((s) => ({ ...s, [i]: "error" }));
-                alert("Send failed: " + (data.error || `HTTP ${res.status}`));
+                const reason = data?.error || `HTTP ${res.status}`;
+                alert("Send failed: " + reason + "\n\nYou can tap Send SMS again to retry.");
             }
         } catch (err) {
             setSendState((s) => ({ ...s, [i]: "error" }));
-            alert("Network error: " + (err?.message || "unknown"));
+            alert("Could not send — network/server error: " + (err?.message || "unknown") + "\n\nYou can tap Send SMS again to retry.");
         }
     };
 
@@ -1708,21 +1710,43 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                         </button>
                         <button
                             onClick={() => sendSms(i)}
-                            disabled={sendState[i] === "sending" || sentSteps.includes(i)}
-                            title={sentSteps.includes(i) ? "Already sent" : "Send this message via Voodoo SMS"}
+                            disabled={sendState[i] === "sending"}
+                            title={
+                                sendState[i] === "sending"
+                                    ? "Sending…"
+                                    : sentSteps.includes(i)
+                                      ? "Already sent — tap to resend via Voodoo SMS"
+                                      : "Send this message via Voodoo SMS"
+                            }
                             style={{
                                 fontSize: 10,
                                 fontWeight: 700,
                                 border: "none",
                                 borderRadius: 6,
                                 padding: "3px 9px",
-                                cursor: sendState[i] === "sending" || sentSteps.includes(i) ? "default" : "pointer",
-                                background: sentSteps.includes(i) || sendState[i] === "sent" ? "#D1FAE5" : C.pink,
-                                color: sentSteps.includes(i) || sendState[i] === "sent" ? "#065F46" : "#fff",
+                                cursor: sendState[i] === "sending" ? "default" : "pointer",
+                                background:
+                                    sendState[i] === "error"
+                                        ? "#FEE2E2"
+                                        : sentSteps.includes(i) || sendState[i] === "sent"
+                                          ? "#D1FAE5"
+                                          : C.pink,
+                                color:
+                                    sendState[i] === "error"
+                                        ? C.red
+                                        : sentSteps.includes(i) || sendState[i] === "sent"
+                                          ? "#065F46"
+                                          : "#fff",
                                 opacity: sendState[i] === "sending" ? 0.6 : 1,
                             }}
                         >
-                            {sendState[i] === "sending" ? "Sending…" : sentSteps.includes(i) ? "✓ Sent" : "Send SMS"}
+                            {sendState[i] === "sending"
+                                ? "Sending…"
+                                : sendState[i] === "error"
+                                  ? "↻ Retry Send"
+                                  : sentSteps.includes(i) || sendState[i] === "sent"
+                                    ? "✓ Sent · Resend"
+                                    : "Send SMS"}
                         </button>
                     </div>
                 </div>

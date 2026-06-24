@@ -1789,6 +1789,56 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
     const [expanded, setExpanded] = useState({});
     const [switchingId, setSwitchingId] = useState(null);
     const [switchData, setSwitchData] = useState({});
+    // sendState keyed by `${inqId}:${stepIndex}` -> 'sending' | 'sent' | 'error'
+    const [sendState, setSendState] = useState({});
+
+    // Actually SEND a single pre-generated message (e.g. the Step 2 Enrolment
+    // Form message, which is due "after payment confirmed") through the Voodoo
+    // SMS serverless function. Previously the Pending tab only had a checkbox
+    // that *marked* a step as sent without ever sending the SMS — so phased
+    // messages like e2 could never be delivered from here.
+    const sendSms = async (inq, i) => {
+        const msg = (inq.messages || [])[i];
+        if (!msg) return;
+        if (!settings.voodoo?.apiKey || !settings.voodoo?.senderName) {
+            alert("Add your Voodoo SMS API key and sender name in Settings first.");
+            return;
+        }
+        if (!inq.phone) {
+            alert("No phone number logged for this enquiry.");
+            return;
+        }
+        const key = `${inq.id}:${i}`;
+        setSendState((s) => ({ ...s, [key]: "sending" }));
+        try {
+            const res = await fetch("/api/send-sms", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    apiKey: settings.voodoo.apiKey,
+                    senderName: settings.voodoo.senderName,
+                    toNumber: inq.phone,
+                    body: msg.content,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.success) {
+                setSendState((s) => ({ ...s, [key]: "sent" }));
+                // Persist this step as sent on the enquiry.
+                const cur = inq.sentSteps || [];
+                if (!cur.includes(i)) {
+                    await onUpdate(inq.id, { sentSteps: [...cur, i].sort((a, b) => a - b) });
+                }
+            } else {
+                setSendState((s) => ({ ...s, [key]: "error" }));
+                const reason = data?.error || `HTTP ${res.status}`;
+                alert("Send failed: " + reason + "\n\nYou can tap Send SMS again to retry.");
+            }
+        } catch (err) {
+            setSendState((s) => ({ ...s, [key]: "error" }));
+            alert("Could not send — network/server error: " + (err?.message || "unknown"));
+        }
+    };
 
     const openSwitch = (inq) => {
         setSwitchingId(inq.id);
@@ -1942,6 +1992,45 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
                                             </div>
                                             <div style={{ fontSize: 12, color: C.text, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
                                                 {msg.content}
+                                            </div>
+                                            <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                                <button
+                                                    onClick={() => sendSms(inq, i)}
+                                                    disabled={sendState[`${inq.id}:${i}`] === "sending"}
+                                                    style={{
+                                                        fontSize: 10,
+                                                        fontWeight: 700,
+                                                        border: "none",
+                                                        borderRadius: 6,
+                                                        padding: "3px 9px",
+                                                        cursor:
+                                                            sendState[`${inq.id}:${i}`] === "sending" ? "default" : "pointer",
+                                                        background:
+                                                            sendState[`${inq.id}:${i}`] === "error"
+                                                                ? "#FEE2E2"
+                                                                : sent.includes(i) || sendState[`${inq.id}:${i}`] === "sent"
+                                                                  ? "#D1FAE5"
+                                                                  : C.pink,
+                                                        color:
+                                                            sendState[`${inq.id}:${i}`] === "error"
+                                                                ? C.red
+                                                                : sent.includes(i) || sendState[`${inq.id}:${i}`] === "sent"
+                                                                  ? "#065F46"
+                                                                  : "#fff",
+                                                        opacity: sendState[`${inq.id}:${i}`] === "sending" ? 0.6 : 1,
+                                                    }}
+                                                >
+                                                    {sendState[`${inq.id}:${i}`] === "sending"
+                                                        ? "Sending…"
+                                                        : sendState[`${inq.id}:${i}`] === "error"
+                                                          ? "↻ Retry Send"
+                                                          : sent.includes(i) || sendState[`${inq.id}:${i}`] === "sent"
+                                                            ? "✓ Sent · Resend"
+                                                            : "Send SMS"}
+                                                </button>
+                                                <span style={{ fontSize: 9, color: C.muted }}>
+                                                    checkbox = manually mark sent only
+                                                </span>
                                             </div>
                                         </div>
                                     </div>

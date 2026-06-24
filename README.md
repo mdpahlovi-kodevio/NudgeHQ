@@ -276,7 +276,7 @@ Each card shows:
 
 - Parent name, phone, branch, workflow label
 - **Days ago** in an urgency colour: pink (<7d), amber (≥7d), red (≥10d)
-- A blue progress strip: **"Step X of N sent"** with the next step's label, or "All messages sent ✓". A **View/Hide** toggle expands the full message list with per-step checkboxes (manual mark-as-sent via `toggleSent`).
+- A blue progress strip: **"Step X of N sent"** with the next step's label, or "All messages sent ✓". A **View/Hide** toggle expands the full message list. Each step row has a **Send SMS** button (real Voodoo SMS send via `sendSms` → `/api/send-sms`, with sending/sent/error states and resend) **plus** a checkbox to manually mark a step sent without sending (`toggleSent`) — this matters because enquiry steps are phased (e1 immediately, e2 enrolment form *after payment*, e3 after the form, e4 24h later), so e2/e3/e4 are normally delivered from here, not from the New tab.
 - Student names + grand total
 - If ≥3 days have passed and not all steps are sent: an amber "⏰ consider sending step X+1" nudge.
 - **Switch Path** (only when `inq.intent === "thinking"`) — a pink **"↗ Parent wants to proceed — Switch Path"** button opens an inline panel where staff pick a package, session slot(s) and a payment method (Card/Bank) per student, then **"Generate Payment Message →"** runs `generateMsgs("enquiry", …)`, flips the enquiry's `intent` to `"proceed"`, resets `sentSteps` to `[]`, and overwrites `messages`/`students`/`grandTotal`/`payMethod` in place — turning a soft Nudge enquiry into a full onboarding sequence without re-keying the family's details.

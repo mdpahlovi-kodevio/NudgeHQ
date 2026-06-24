@@ -3,12 +3,14 @@
 
 export default async function handler(req, res) {
     if (req.method !== "POST") {
+        console.warn("[send-sms] 405 — method not allowed:", req.method);
         return res.status(405).json({ error: "Method not allowed" });
     }
 
     const { apiKey, senderName, toNumber, body } = req.body;
 
     if (!apiKey || !senderName || !toNumber || body == null) {
+        console.warn("[send-sms] 400 — missing fields:", { apiKey: !!apiKey, senderName: !!senderName, toNumber: !!toNumber, body: body != null });
         return res.status(400).json({
             error: "Missing required fields: apiKey, senderName, toNumber, body",
         });
@@ -25,6 +27,7 @@ export default async function handler(req, res) {
         dest = "44" + dest.slice(1);
     }
     if (!/^44\d{10}$/.test(dest)) {
+        console.warn(`[send-sms] 400 — invalid UK mobile: "${toNumber}" → ${dest}`);
         return res.status(400).json({
             error: `Invalid UK mobile number. Got "${toNumber}" → ${dest}. Expected 07xxxxxxxxx or +44 7xxx xxxxxx.`,
         });
@@ -36,6 +39,7 @@ export default async function handler(req, res) {
         .slice(0, 11)
         .trim();
     if (!from) {
+        console.warn("[send-sms] 400 — invalid sender name (empty after clean-up):", senderName);
         return res.status(400).json({ error: "Invalid sender name (empty after clean-up)." });
     }
 
@@ -63,6 +67,8 @@ export default async function handler(req, res) {
         form.append("from", from);
         form.append("msg", messageBody);
 
+        console.info(`[send-sms] sending to ${dest} from "${from}" (${messageBody.length} chars)`);
+
         const voodooRes = await fetch("https://api.voodoosms.com/sendsms", {
             method: "POST",
             headers: {
@@ -74,9 +80,11 @@ export default async function handler(req, res) {
 
         let data = null;
         const rawText = await voodooRes.text();
+        console.info(`[send-sms] Voodoo responded HTTP ${voodooRes.status}:`, rawText);
         try {
             data = rawText ? JSON.parse(rawText) : null;
         } catch {
+            console.error(`[send-sms] 502 — non-JSON response (HTTP ${voodooRes.status})`);
             return res.status(502).json({
                 error: `Voodoo SMS returned a non-JSON response (HTTP ${voodooRes.status}).`,
             });
@@ -90,6 +98,7 @@ export default async function handler(req, res) {
                 data?.msg ||
                 `Voodoo SMS error (HTTP ${voodooRes.status})`;
             const errCode = data?.error?.code;
+            console.error(`[send-sms] Voodoo error — code=${errCode} msg="${errMsg}" to=${dest}`);
             return res.status(voodooRes.status >= 400 && voodooRes.status < 600 ? voodooRes.status : 400).json({
                 error: errCode != null ? `[${errCode}] ${errMsg}` : errMsg,
                 code: errCode,
@@ -99,12 +108,14 @@ export default async function handler(req, res) {
 
         const msg = Array.isArray(data?.messages) ? data.messages[0] : null;
         if (msg && /reject|fail|invalid|error/i.test(msg.status || "")) {
+            console.error(`[send-sms] Voodoo rejected message — status=${msg.status} to=${dest}`);
             return res.status(400).json({
                 error: `Voodoo SMS rejected the message: ${msg.status}`,
                 detail: data,
             });
         }
 
+        console.info(`[send-sms] ✓ sent — id=${msg?.id} status=${msg?.status} to=${dest} credits=${data?.credits} balance=${data?.balance}`);
         return res.status(200).json({
             success: true,
             messageId: msg?.id || data?.id || data?.reference,
@@ -113,6 +124,7 @@ export default async function handler(req, res) {
             credits: data?.credits,
         });
     } catch (err) {
+        console.error("[send-sms] 500 — fetch threw:", err?.message || err);
         return res.status(500).json({ error: "Could not reach Voodoo SMS: " + (err?.message || "unknown error") });
     }
 }

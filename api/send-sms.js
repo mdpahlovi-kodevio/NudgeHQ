@@ -14,12 +14,10 @@ export default async function handler(req, res) {
         });
     }
 
-    // Normalise the destination number to international format (44…)
     let dest = String(toNumber).replace(/\D/g, "");
     if (dest.startsWith("0044")) dest = "44" + dest.slice(4);
     else if (dest.startsWith("00")) dest = dest.slice(2);
     if (dest.startsWith("44")) {
-        // already international
     } else if (dest.startsWith("7")) {
         dest = "44" + dest;
     } else if (dest.startsWith("07")) {
@@ -31,7 +29,6 @@ export default async function handler(req, res) {
         });
     }
 
-    // Sanitise sender name (alphanumeric + spaces, max 11 chars)
     const from = String(senderName)
         .replace(/[^a-zA-Z0-9 ]/g, "")
         .slice(0, 11)
@@ -40,28 +37,23 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Invalid sender name (empty after clean-up)." });
     }
 
-    // Normalise line breaks: real newlines, CRLF, CR, or literal "\n" → LF
-    // Then force GSM-7 encoding: map common Unicode punctuation to ASCII
-    // equivalents and strip anything outside the GSM-7 character set.
-    // Non-GSM-7 characters force Voodoo SMS to use UCS-2 encoding (70 chars
-    // per part instead of 160), which multiplies credit usage for long
-    // messages.
     const GSM7 = "A-Za-z0-9@£$¥èéùìòÇØøÅåΔΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./:;<=>?¡§¿ÄÖÑÜ§äöñüà|^€{}\\\][~\n";
     const messageBody = String(body)
         .replace(/\r\n/g, "\n")
         .replace(/\r/g, "\n")
         .replace(/\\n/g, "\n")
-        .replace(/[\u2013\u2014]/g, "-")        // en/em dash → hyphen
-        .replace(/[\u2018\u2019\u201A\u2032]/g, "'")  // smart single quotes → '
-        .replace(/[\u201C\u201D\u201E\u2033]/g, '"')  // smart double quotes → "
-        .replace(/\u2026/g, "...")                 // ellipsis → ...
-        .replace(/[\u2022\u00B7]/g, "*")           // bullet/middle dot → *
-        .replace(/\u00A0/g, " ")                   // non-breaking space → space
-        .replace(/\u20AC/g, "EUR")                  // euro sign → EUR
-        .replace(/\u00A3/g, "£")                   // keep pound (GSM-7)
-        .replace(new RegExp(`[^${GSM7}]`, "g"), "")  // strip any other non-GSM-7
-        .slice(0, 1600);    try {
-        // Voodoo SMS expects application/x-www-form-urlencoded, NOT JSON.
+        .replace(/[\u2013\u2014]/g, "-")
+        .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+        .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+        .replace(/\u2026/g, "...")
+        .replace(/[\u2022\u00B7]/g, "*")
+        .replace(/\u00A0/g, " ")
+        .replace(/\u20AC/g, "EUR")
+        .replace(/\u00A3/g, "£")
+        .replace(new RegExp(`[^${GSM7}]`, "g"), "")
+        .slice(0, 1600);
+
+    try {
         const form = new URLSearchParams();
         form.append("to", dest);
         form.append("from", from);

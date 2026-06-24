@@ -41,13 +41,26 @@ export default async function handler(req, res) {
     }
 
     // Normalise line breaks: real newlines, CRLF, CR, or literal "\n" → LF
+    // Then force GSM-7 encoding: map common Unicode punctuation to ASCII
+    // equivalents and strip anything outside the GSM-7 character set.
+    // Non-GSM-7 characters force Voodoo SMS to use UCS-2 encoding (70 chars
+    // per part instead of 160), which multiplies credit usage for long
+    // messages.
+    const GSM7 = "A-Za-z0-9@£$¥èéùìòÇØøÅåΔΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./:;<=>?¡§¿ÄÖÑÜ§äöñüà|^€{}\\\][~\n";
     const messageBody = String(body)
         .replace(/\r\n/g, "\n")
         .replace(/\r/g, "\n")
         .replace(/\\n/g, "\n")
-        .slice(0, 1600);
-
-    try {
+        .replace(/[\u2013\u2014]/g, "-")        // en/em dash → hyphen
+        .replace(/[\u2018\u2019\u201A\u2032]/g, "'")  // smart single quotes → '
+        .replace(/[\u201C\u201D\u201E\u2033]/g, '"')  // smart double quotes → "
+        .replace(/\u2026/g, "...")                 // ellipsis → ...
+        .replace(/[\u2022\u00B7]/g, "*")           // bullet/middle dot → *
+        .replace(/\u00A0/g, " ")                   // non-breaking space → space
+        .replace(/\u20AC/g, "EUR")                  // euro sign → EUR
+        .replace(/\u00A3/g, "£")                   // keep pound (GSM-7)
+        .replace(new RegExp(`[^${GSM7}]`, "g"), "")  // strip any other non-GSM-7
+        .slice(0, 1600);    try {
         // Voodoo SMS expects application/x-www-form-urlencoded, NOT JSON.
         const form = new URLSearchParams();
         form.append("to", dest);

@@ -14,6 +14,7 @@ export default async function handler(req, res) {
         });
     }
 
+    // Normalise the destination number to international format (44…)
     let dest = String(toNumber).replace(/\D/g, "");
     if (dest.startsWith("0044")) dest = "44" + dest.slice(4);
     else if (dest.startsWith("00")) dest = dest.slice(2);
@@ -29,6 +30,7 @@ export default async function handler(req, res) {
         });
     }
 
+    // Sanitise sender name (alphanumeric + spaces, max 11 chars)
     const from = String(senderName)
         .replace(/[^a-zA-Z0-9 ]/g, "")
         .slice(0, 11)
@@ -37,6 +39,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Invalid sender name (empty after clean-up)." });
     }
 
+    // Normalise line breaks and force GSM-7 encoding to avoid UCS-2 credit inflation
     const GSM7 = "A-Za-z0-9@£$¥èéùìòÇØøÅåΔΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./:;<=>?¡§¿ÄÖÑÜ§äöñüà|^€{}\\\][~\n";
     const messageBody = String(body)
         .replace(/\r\n/g, "\n")
@@ -54,6 +57,7 @@ export default async function handler(req, res) {
         .slice(0, 1600);
 
     try {
+        // Voodoo SMS expects application/x-www-form-urlencoded, NOT JSON.
         const form = new URLSearchParams();
         form.append("to", dest);
         form.append("from", from);

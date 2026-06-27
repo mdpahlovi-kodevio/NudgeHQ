@@ -2,7 +2,7 @@
 
 **Enquiry automation & SMS follow-up for tutoring centres.**
 
-NudgeHQ is a white-label, mobile-first PWA that helps tutoring business staff turn phone enquiries into enrolled students. After taking a call, a staff member opens the app, enters the family's details (by typing or voice), and NudgeHQ instantly generates a personalised, multi-step WhatsApp/SMS message sequence — complete with confirmed session times, package pricing, pro-rata first payment, payment links and follow-up reminders — that can be copied or sent directly via [Voodoo SMS](https://voodoosms.com).
+NudgeHQ is a white-label, mobile-first PWA that helps tutoring business staff turn phone enquiries into enrolled students. After taking a call, a staff member opens the app, enters the family's details (by typing or voice), and NudgeHQ instantly generates a personalised, multi-step WhatsApp/SMS message sequence — complete with confirmed session times, package pricing, pro-rata first payment, payment links and follow-up reminders — that can be copied or sent directly via [Twilio](https://www.twilio.com).
 
 Built with **React 18 + Vite**, deployed to **Vercel** (where the SMS send runs as a serverless function), and installed to the home screen like a native app.
 
@@ -59,17 +59,17 @@ Each business gets its own deployment, configures its own branding/branches/pack
 
 ## 2. Tech stack
 
-| Layer        | Choice                                             |
-| ------------ | -------------------------------------------------- |
-| UI framework | React 18 (function components, hooks)              |
-| Bundler      | Vite 5                                             |
-| Styling      | Inline styles only — no CSS framework              |
-| State        | React `useState` / `useEffect`, all in one file    |
-| Storage      | `localStorage` (Phase 1 — no backend)              |
-| SMS          | Voodoo SMS REST API via Vercel serverless function |
-| Hosting      | Vercel (auto HTTPS)                                |
-| PWA          | `manifest.json` + service worker, installable      |
-| Voice        | Web Speech API (`webkitSpeechRecognition`)         |
+| Layer        | Choice                                                                |
+| ------------ | --------------------------------------------------------------------- |
+| UI framework | React 18 (function components, hooks)                                 |
+| Bundler      | Vite 5                                                                |
+| Styling      | Inline styles only — no CSS framework                                 |
+| State        | React `useState` / `useEffect`, all in one file                       |
+| Storage      | `localStorage` (Phase 1 — no backend)                                 |
+| SMS          | Twilio Programmable Messaging REST API via Vercel serverless function |
+| Hosting      | Vercel (auto HTTPS)                                                   |
+| PWA          | `manifest.json` + service worker, installable                         |
+| Voice        | Web Speech API (`webkitSpeechRecognition`)                            |
 
 > Per the developer brief, **all application logic lives in a single file — `src/App.jsx`** and must not be split. This README documents that file end to end.
 
@@ -86,7 +86,7 @@ nudgehq/
 │   ├── main.jsx            # mounts <App/>, registers service worker
 │   └── App.jsx             # THE ENTIRE APP (constants, helpers, UI, all tabs)
 ├── api/
-│   └── send-sms.js         # Vercel serverless fn → Voodoo SMS
+│   └── send-sms.js         # Vercel serverless fn → Twilio
 ├── public/
 │   ├── manifest.json       # PWA manifest (name, icons, colors, orientation)
 │   ├── sw.js               # service worker — cache-first fallback for GETs
@@ -115,7 +115,7 @@ Everything is stored in the browser's `localStorage` under three keys:
 
 | Key            | Contents                                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------- |
-| `nhq_settings` | Business config (name, phone, reg fee, packages, branches, templates override, PIN, Voodoo) |
+| `nhq_settings` | Business config (name, phone, reg fee, packages, branches, templates override, PIN, Twilio) |
 | `nhq_tpl`      | Message templates (defaults overridden when edited in the Templates tab)                    |
 | `nhq_inq`      | Array of enquiry records                                                                    |
 
@@ -129,7 +129,7 @@ Helpers `sGet`/`sSet` (async wrappers around `localStorage.getItem`/`setItem` wi
   packages: [ {id, hours, monthly} x4 ],          // 2h £100, 4h £140, 6h £180, 8h £220
   branches:  [ { id, name, phone, email, sumupLink, calendlyLink,
                  bankSort, bankAcct, slots:[{id, day, time}] } ],
-  voodoo: { apiKey, senderName },
+  twilio: { accountSid, authToken, from },
   pin: ""
 }
 ```
@@ -203,6 +203,7 @@ This is the heart of the app: a 3-step guided form (`NewTab`).
     - 💭 Nudge — Thinking About It (3 messages)
 
     The **Nudge** workflow can be picked directly here **or** invoked automatically when the parent's response is "Thinking About It" (see below).
+
 - **Parent/Guardian** — Name + Mobile number, both voice-enabled (🎤). The phone field runs spoken numbers through `normalisePhone` (handles "double seven", "oh", "nought", formats 11-digit numbers as `XXXXX XXX XXXX`).
 - **Students** (hidden for `pricing`/`info` workflows) — one or more `StudentCard`s. Add sibling / remove. Each card captures:
     - Name (voice-enabled)
@@ -276,7 +277,7 @@ Each card shows:
 
 - Parent name, phone, branch, workflow label
 - **Days ago** in an urgency colour: pink (<7d), amber (≥7d), red (≥10d)
-- A blue progress strip: **"Step X of N sent"** with the next step's label, or "All messages sent ✓". A **View/Hide** toggle expands the full message list. Each step row has a **Send SMS** button (real Voodoo SMS send via `sendSms` → `/api/send-sms`, with sending/sent/error states and resend) **plus** a checkbox to manually mark a step sent without sending (`toggleSent`) — this matters because enquiry steps are phased (e1 immediately, e2 enrolment form *after payment*, e3 after the form, e4 24h later), so e2/e3/e4 are normally delivered from here, not from the New tab.
+- A blue progress strip: **"Step X of N sent"** with the next step's label, or "All messages sent ✓". A **View/Hide** toggle expands the full message list. Each step row has a **Send SMS** button (real Twilio send via `sendSms` → `/api/send-sms`, with sending/sent/error states and resend) **plus** a checkbox to manually mark a step sent without sending (`toggleSent`) — this matters because enquiry steps are phased (e1 immediately, e2 enrolment form _after payment_, e3 after the form, e4 24h later), so e2/e3/e4 are normally delivered from here, not from the New tab.
 - Student names + grand total
 - If ≥3 days have passed and not all steps are sent: an amber "⏰ consider sending step X+1" nudge.
 - **Switch Path** (only when `inq.intent === "thinking"`) — a pink **"↗ Parent wants to proceed — Switch Path"** button opens an inline panel where staff pick a package, session slot(s) and a payment method (Card/Bank) per student, then **"Generate Payment Message →"** runs `generateMsgs("enquiry", …)`, flips the enquiry's `intent` to `"proceed"`, resets `sentSteps` to `[]`, and overwrites `messages`/`students`/`grandTotal`/`payMethod` in place — turning a soft Nudge enquiry into a full onboarding sequence without re-keying the family's details.
@@ -321,7 +322,7 @@ Templates are merged at generate time: `templates[key] || DEFAULT_TPL[key]`, so 
     - Timetable: add/remove session slots `{day, time}`
     - Remove branch (if >1)
 4. **Access PIN** — 4–6 digit numeric PIN, blank = no lock.
-5. **SMS (Voodoo SMS)** — API key (password field) + sender name (max 11 chars, shown to recipients as "from"). Helper text links to voodoosms.com and notes ~£0.04/msg.
+5. **SMS (Twilio)** — Account SID, Auth Token (password field) + From sender (a Twilio number e.g. +44 7xxx xxxxxx or an alphanumeric sender ID max 11 chars). Helper text links to twilio.com.
 
 **Save Settings** persists; **Cancel** reverts the draft to a deep clone of the current settings.
 
@@ -331,11 +332,11 @@ Templates are merged at generate time: `templates[key] || DEFAULT_TPL[key]`, so 
 
 In Step 3 of the New tab, each message card has a **Send SMS** button (`sendSms`):
 
-1. Guard: Voodoo API key + sender name must be set in Settings; phone must be present.
+1. Guard: Twilio Account SID + Auth Token + From sender must be set in Settings; phone must be present.
 2. Set `sendState[i] = "sending"` (button greys out, shows "Sending…").
-3. `POST /api/send-sms` with `{ apiKey, senderName, toNumber: phone, body: getMsg(i) }`.
+3. `POST /api/send-sms` with `{ accountSid, authToken, from, toNumber: phone, body: getMsg(i) }`.
 4. On `data.success`: `sendState[i] = "sent"`, push `i` into `sentSteps`, and `onUpdate(inqId, { sentSteps })` so the Pending counter ticks up immediately and persists. The button becomes a green **"✓ Sent · Resend"** — it is **not disabled**, so staff can tap it again to re-send the same message if it didn't arrive.
-5. On failure: `sendState[i] = "error"`, the button turns red and reads **"↻ Retry Send"**, and an alert shows the **real Voodoo error message** (e.g. `[14] Cannot send to this country`, `[26] Invalid Sender ID`, insufficient credits) with a reminder that they can retry. The button stays clickable so the send can be attempted again immediately.
+5. On failure: `sendState[i] = "error"`, the button turns red and reads **"↻ Retry Send"**, and an alert shows the **real Twilio error message** (e.g. `[21211] Invalid phone number`, `[21612] alphanumeric sender IDs not allowed`, insufficient balance) with a reminder that they can retry. The button stays clickable so the send can be attempted again immediately.
 
 > The send button is only disabled while a request is in flight (`sendState === "sending"`). It is never locked by `sentSteps` — so a message can always be resent or retried. This fixes the earlier "turns green and can't be re-sent" glitch.
 
@@ -344,10 +345,10 @@ The serverless function (`api/send-sms.js`):
 - Validates required fields.
 - **Strictly normalises the UK mobile number** to international format `44XXXXXXXXXX` (handles `07…`, `+44…`, `44…`, `0044…`, and mobile-without-leading-`0` `7…`). Rejects anything that isn't a valid 12-digit UK mobile with a clear message, so a mistyped number fails fast instead of silently going nowhere.
 - Sanitises the sender name (alphanumeric + spaces, ≤11 chars).
-- Truncates body to 1600 chars (Voodoo concatenates long messages). Emoji and UTF-8 content pass through unchanged — the browser sends proper UTF-8 JSON, which Voodoo preserves.
-- Calls `POST https://api.voodoosms.com/sendsms` with `Bearer` auth.
-- **Parses Voodoo's response defensively** (text-first, then `JSON.parse`) so a non-JSON gateway error (502 HTML etc.) is reported cleanly instead of crashing.
-- **Extracts errors from Voodoo's actual shape** `{ error: { code, msg } }` (with fallbacks for legacy `{ message }` / string `error`) and returns them prefixed with the code, e.g. `[14] Cannot send to this country`. This is why the client now sees the real reason instead of `[object Object]`.
+- Truncates body to 1600 chars (Twilio concatenates long messages into segments). Emoji and UTF-8 content pass through unchanged — the browser sends proper UTF-8 JSON, which Twilio preserves.
+- Calls `POST https://api.twilio.com/2010-04-01/Accounts/{AccountSid}/Messages.json` with HTTP Basic auth (`AccountSid:AuthToken`).
+- **Parses Twilio's response defensively** (text-first, then `JSON.parse`) so a non-JSON gateway error (502 HTML etc.) is reported cleanly instead of crashing.
+- **Extracts errors from Twilio's actual shape** `{ code, message, more_info, status }` and returns them prefixed with the code, e.g. `[21211] The destination number is invalid`. This is why the client now sees the real reason instead of `[object Object]`.
 - Reads success info from `data.messages[0]` (`id` / `status`) and also returns `balance` / `credits`.
 - Treats an explicit failure status inside a 200 (e.g. `REJECTED`) as an error.
 - Returns `{ success, messageId, status, balance, credits }` or a descriptive error.
@@ -377,35 +378,35 @@ Default templates are shipped in `DEFAULT_TPL` and can be overridden per-busines
 
 `computeVars(data, settings)` produces the 27 variables below. All are replaced in templates via `[VAR_NAME]`.
 
-| Variable               | Meaning                                                           |
-| ---------------------- | ----------------------------------------------------------------- |
-| `[PARENT_NAME]`        | Parent/guardian name (defaults to "there")                        |
-| `[BRANCH]`             | Branch name                                                       |
-| `[BRANCH_PHONE]`       | Branch direct mobile                                              |
-| `[GENERAL_PHONE]`      | Main/general phone number                                         |
-| `[BUSINESS_NAME]`      | Business name                                                     |
-| `[STUDENT_NAMES]`      | All student names joined with " & " (e.g. "Zaynab & Ibrahim")     |
-| `[STUDENT_POSSESSIVE]` | "Zaynab's" for one, "your children's" for multiple                |
-| `[SESSION_LINES]`      | Confirmed slots per student (Step 1)                              |
-| `[SESSION_SUMMARY]`    | Class details — omits the name when there's a single student      |
-| `[CALENDLY_LINE]`      | Full Calendly trial line — only appears if a Calendly link is set for that branch (empty otherwise) |
-| `[CALENDLY_SHORT_LINE]`| Short Calendly append (" Or book a free trial: …") — only appears if Calendly is set; used inline in n2 |
+| Variable                   | Meaning                                                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[PARENT_NAME]`            | Parent/guardian name (defaults to "there")                                                                                                                     |
+| `[BRANCH]`                 | Branch name                                                                                                                                                    |
+| `[BRANCH_PHONE]`           | Branch direct mobile                                                                                                                                           |
+| `[GENERAL_PHONE]`          | Main/general phone number                                                                                                                                      |
+| `[BUSINESS_NAME]`          | Business name                                                                                                                                                  |
+| `[STUDENT_NAMES]`          | All student names joined with " & " (e.g. "Zaynab & Ibrahim")                                                                                                  |
+| `[STUDENT_POSSESSIVE]`     | "Zaynab's" for one, "your children's" for multiple                                                                                                             |
+| `[SESSION_LINES]`          | Confirmed slots per student (Step 1)                                                                                                                           |
+| `[SESSION_SUMMARY]`        | Class details — omits the name when there's a single student                                                                                                   |
+| `[CALENDLY_LINE]`          | Full Calendly trial line — only appears if a Calendly link is set for that branch (empty otherwise)                                                            |
+| `[CALENDLY_SHORT_LINE]`    | Short Calendly append (" Or book a free trial: …") — only appears if Calendly is set; used inline in n2                                                        |
 | `[PACKAGE_DISCUSSED_LINE]` | Package(s) discussed on the call — single-line for one student, bulleted list for several; **blank if no package was selected** (used by the Nudge n1 message) |
-| `[WEEKLY_SESSIONS]`    | Weekly sessions per student                                       |
-| `[PACKAGE_LINES]`      | Package per student (`2hrs/week — £100/month`)                    |
-| `[FIRST_PAYMENT]`      | Total first payment (reg fee + pro-rata, all students)            |
-| `[MONTHLY_TOTAL]`      | Total ongoing monthly amount                                      |
-| `[PAYMENT_LINE]`       | Card link **OR** bank details — based on Step 2 payment selection |
-| `[BANK_NAME]`          | Bank account name                                                 |
-| `[BANK_SORT]`          | Sort code (branch-level)                                          |
-| `[BANK_ACCT]`          | Account number (branch-level)                                     |
-| `[BANK_REF]`           | Payment reference instruction (`SURNAME + DOB DDMMYY`)            |
-| `[JOTFORMS_LINK]`      | Enrolment form link                                               |
-| `[CALENDLY_LINK]`      | Trial booking link (branch-level)                                 |
-| `[SLOT_LIST]`          | Available session times (used by pricing workflow)                |
-| `[REG_FEE]`            | Registration fee amount                                           |
-| `[SUMUP_LINK]`         | Branch SumUp card payment link                                    |
-| `[SURNAME]`            | Student surname in capitals (used in bank ref)                    |
+| `[WEEKLY_SESSIONS]`        | Weekly sessions per student                                                                                                                                    |
+| `[PACKAGE_LINES]`          | Package per student (`2hrs/week — £100/month`)                                                                                                                 |
+| `[FIRST_PAYMENT]`          | Total first payment (reg fee + pro-rata, all students)                                                                                                         |
+| `[MONTHLY_TOTAL]`          | Total ongoing monthly amount                                                                                                                                   |
+| `[PAYMENT_LINE]`           | Card link **OR** bank details — based on Step 2 payment selection                                                                                              |
+| `[BANK_NAME]`              | Bank account name                                                                                                                                              |
+| `[BANK_SORT]`              | Sort code (branch-level)                                                                                                                                       |
+| `[BANK_ACCT]`              | Account number (branch-level)                                                                                                                                  |
+| `[BANK_REF]`               | Payment reference instruction (`SURNAME + DOB DDMMYY`)                                                                                                         |
+| `[JOTFORMS_LINK]`          | Enrolment form link                                                                                                                                            |
+| `[CALENDLY_LINK]`          | Trial booking link (branch-level)                                                                                                                              |
+| `[SLOT_LIST]`              | Available session times (used by pricing workflow)                                                                                                             |
+| `[REG_FEE]`                | Registration fee amount                                                                                                                                        |
+| `[SUMUP_LINK]`             | Branch SumUp card payment link                                                                                                                                 |
+| `[SURNAME]`                | Student surname in capitals (used in bank ref)                                                                                                                 |
 
 Smart details:
 
@@ -498,7 +499,7 @@ UI primitives (all inline-styled): `Card`, `ST` (section title), `Lbl`, `Inp`, `
 2. Connect the repo to Vercel (or drag `dist/`). Vercel auto-detects Vite and the `api/` serverless functions.
 3. HTTPS is automatic — required for the Web Speech API, service worker and PWA install.
 4. Optional custom domain, e.g. `clientname.nudgehq.co.uk`.
-5. Each white-label customer = their own Vercel deployment with their own localStorage + their own Voodoo SMS account/API key.
+5. Each white-label customer = their own Vercel deployment with their own localStorage + their own Twilio account/credentials.
 
 Test the install flow on Android Chrome (Add to Home screen) and iOS Safari (Share → Add to Home Screen).
 
@@ -512,7 +513,7 @@ From the developer brief — separate scope after Phase 1 sign-off:
 - **Email + password auth** per business
 - **Admin dashboard** for the owner to manage customer accounts
 - **Automated follow-up scheduling** — send follow-up messages on timed delays
-- **Inbound STOP handling** via a Voodoo SMS webhook
+- **Inbound STOP handling** via a Twilio webhook
 - **JotForms webhook** → auto-flip enquiry status to Enrolled (currently manual in the Log tab)
 
 ---

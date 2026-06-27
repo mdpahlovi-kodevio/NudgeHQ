@@ -21,7 +21,7 @@ nudgehq/
 │   ├── icon-192.png        # YOU CREATE — navy #3B58A8 bg, white "NH" text, 192×192px
 │   └── icon-512.png        # Same design, 512×512px
 └── api/
-    └── send-sms.js         # Vercel serverless function — Voodoo SMS
+    └── send-sms.js         # Vercel serverless function — Twilio
 ```
 
 ---
@@ -42,15 +42,16 @@ nudgehq/
 
 ---
 
-### 2. Wire up Voodoo SMS Send button
+### 2. Wire up Twilio Send button
 
-The app Settings tab has a Voodoo SMS section where each business enters:
-- **API Key** — from voodoosms.com → Send SMS → API SMS → HTTP API
-- **Sender Name** — up to 11 chars, shown as "from" on recipient's phone (e.g. "NudgeHQ")
+The app Settings tab has a Twilio section where each business enters:
+- **Account SID** — from twilio.com console (starts with `AC…`)
+- **Auth Token** — from twilio.com console
+- **From** — a Twilio number (e.g. `+447xxxxxxxxxx`) or an alphanumeric sender ID (up to 11 chars, e.g. "NudgeHQ")
 
-These are stored in localStorage under `settings.voodoo.apiKey` and `settings.voodoo.senderName`.
+These are stored in localStorage under `settings.twilio.accountSid`, `settings.twilio.authToken` and `settings.twilio.from`.
 
-The serverless function at `api/send-sms.js` is ready — it accepts `{ apiKey, senderName, toNumber, body }` and calls the Voodoo SMS REST API.
+The serverless function at `api/send-sms.js` is ready — it accepts `{ accountSid, authToken, from, toNumber, body }` and calls the Twilio Programmable Messaging REST API.
 
 **What you need to add in App.jsx:**
 
@@ -61,8 +62,8 @@ In the Step 3 message display (NewTab component, step 3 render), add a **Send vi
 const [sendState, setSendState] = useState({}) // { [index]: 'idle'|'sending'|'sent'|'error' }
 
 const sendSms = async (i) => {
-  if (!settings.voodoo?.apiKey || !settings.voodoo?.senderName) {
-    alert('Add your Voodoo SMS API key and sender name in Settings first.')
+  if (!settings.twilio?.accountSid || !settings.twilio?.authToken || !settings.twilio?.from) {
+    alert('Add your Twilio Account SID, Auth Token and From number in Settings first.')
     return
   }
   if (!phone) {
@@ -75,8 +76,9 @@ const sendSms = async (i) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        apiKey: settings.voodoo.apiKey,
-        senderName: settings.voodoo.senderName,
+        accountSid: settings.twilio.accountSid,
+        authToken: settings.twilio.authToken,
+        from: settings.twilio.from,
         toNumber: phone,
         body: getMsg(i),
       }),
@@ -122,7 +124,7 @@ Add a Send button inside each message card (after the Copy button):
 - **All app logic is in one file: `src/App.jsx`.** Do not split it.
 - **localStorage** stores all data. No database in Phase 1.
 - **No authentication in Phase 1.** PIN screen is handled inside the app.
-- **Each white-label customer = their own Vercel deployment** with their own localStorage and their own Voodoo SMS account/API key.
+- **Each white-label customer = their own Vercel deployment** with their own localStorage and their own Twilio account/credentials.
 - **Do not change colours:** Blue #3B58A8, Pink #E91E8C, Background #F4F6FC.
 - **Do not change templates or business logic.** UI changes only.
 - Mobile-first. Test on 390px wide screen.
@@ -153,7 +155,7 @@ Add a Send button inside each message card (after the Copy button):
 - User authentication — email + password login per business
 - Admin dashboard — owner manages customer accounts and access
 - Automated follow-up scheduling — send follow-up messages after set time delays
-- Inbound STOP handling via Voodoo SMS webhook
+- Inbound STOP handling via Twilio webhook
 
 ---
 

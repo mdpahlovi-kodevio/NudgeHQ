@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS = {
             ],
         },
     ],
-    voodoo: { apiKey: "", senderName: "" },
+    twilio: { accountSid: "", authToken: "", from: "" },
     pin: "",
 };
 
@@ -1162,8 +1162,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
     const toggleSl = (id) => setSelected((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
     const sendSms = async (i) => {
-        if (!settings.voodoo?.apiKey || !settings.voodoo?.senderName) {
-            alert("Add your Voodoo SMS API key and sender name in Settings first.");
+        if (!settings.twilio?.accountSid || !settings.twilio?.authToken || !settings.twilio?.from) {
+            alert("Add your Twilio Account SID, Auth Token and From number in Settings first.");
             return;
         }
         if (!phone) {
@@ -1176,8 +1176,9 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    apiKey: settings.voodoo.apiKey,
-                    senderName: settings.voodoo.senderName,
+                    accountSid: settings.twilio.accountSid,
+                    authToken: settings.twilio.authToken,
+                    from: settings.twilio.from,
                     toNumber: phone,
                     body: getMsg(i),
                 }),
@@ -1719,8 +1720,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                                 sendState[i] === "sending"
                                     ? "Sending…"
                                     : sentSteps.includes(i)
-                                      ? "Already sent — tap to resend via Voodoo SMS"
-                                      : "Send this message via Voodoo SMS"
+                                      ? "Already sent — tap to resend via Twilio"
+                                      : "Send this message via Twilio"
                             }
                             style={{
                                 fontSize: 10,
@@ -1766,7 +1767,7 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                     marginBottom: 12,
                 }}
             >
-                💬 <strong>Send via Voodoo SMS:</strong> add your API key and sender name in Settings, then tap <em>Send SMS</em> on any
+                💬 <strong>Send via Twilio:</strong> add your Twilio Account SID, Auth Token and From number in Settings, then tap <em>Send SMS</em> on any
                 message above. Sent steps are marked automatically.
             </div>
             <Btn variant="ghost" style={{ width: "100%", padding: 12, marginBottom: 8 }} onClick={doGenerate}>
@@ -1793,15 +1794,15 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
     const [sendState, setSendState] = useState({});
 
     // Actually SEND a single pre-generated message (e.g. the Step 2 Enrolment
-    // Form message, which is due "after payment confirmed") through the Voodoo
+    // Form message, which is due "after payment confirmed") through the Twilio
     // SMS serverless function. Previously the Pending tab only had a checkbox
     // that *marked* a step as sent without ever sending the SMS — so phased
     // messages like e2 could never be delivered from here.
     const sendSms = async (inq, i) => {
         const msg = (inq.messages || [])[i];
         if (!msg) return;
-        if (!settings.voodoo?.apiKey || !settings.voodoo?.senderName) {
-            alert("Add your Voodoo SMS API key and sender name in Settings first.");
+        if (!settings.twilio?.accountSid || !settings.twilio?.authToken || !settings.twilio?.from) {
+            alert("Add your Twilio Account SID, Auth Token and From number in Settings first.");
             return;
         }
         if (!inq.phone) {
@@ -1815,8 +1816,9 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    apiKey: settings.voodoo.apiKey,
-                    senderName: settings.voodoo.senderName,
+                    accountSid: settings.twilio.accountSid,
+                    authToken: settings.twilio.authToken,
+                    from: settings.twilio.from,
                     toNumber: inq.phone,
                     body: msg.content,
                 }),
@@ -2786,9 +2788,9 @@ function SettingsTab({ settings, onSave }) {
                 )}
             </Card>
 
-            {/* Voodoo SMS */}
+            {/* Twilio */}
             <Card>
-                <ST>SMS (Voodoo SMS)</ST>
+                <ST>SMS (Twilio)</ST>
                 <div
                     style={{
                         background: "#EEF2FA",
@@ -2800,28 +2802,37 @@ function SettingsTab({ settings, onSave }) {
                         lineHeight: 1.6,
                     }}
                 >
-                    Each business uses their own Voodoo SMS account. Sign up at voodoosms.com and go to Send SMS → API SMS → HTTP API to get
-                    your API key. SMS costs approximately £0.04 per message.
+                    Each business uses their own Twilio account. Sign up at twilio.com, copy your Account SID and Auth Token from the console, and set up a phone number (or alphanumeric sender ID). Pricing varies by destination.
                 </div>
                 <div style={{ marginBottom: 12 }}>
-                    <Lbl>API Key</Lbl>
+                    <Lbl>Account SID</Lbl>
+                    <Inp
+                        type="text"
+                        value={draft.twilio?.accountSid || ""}
+                        onChange={(e) => setDraft((d) => ({ ...d, twilio: { ...d.twilio, accountSid: e.target.value } }))}
+                        placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        autoComplete="off"
+                    />
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                    <Lbl>Auth Token</Lbl>
                     <Inp
                         type="password"
-                        value={draft.voodoo?.apiKey || ""}
-                        onChange={(e) => setDraft((d) => ({ ...d, voodoo: { ...d.voodoo, apiKey: e.target.value } }))}
-                        placeholder="Your Voodoo SMS API key"
+                        value={draft.twilio?.authToken || ""}
+                        onChange={(e) => setDraft((d) => ({ ...d, twilio: { ...d.twilio, authToken: e.target.value } }))}
+                        placeholder="Your Twilio Auth Token"
                     />
                 </div>
                 <div>
-                    <Lbl>Sender Name (max 11 characters — shown as "from" on recipient's phone)</Lbl>
+                    <Lbl>From (Twilio number e.g. +44 7xxx xxxxxx, or alphanumeric sender ID max 11 chars)</Lbl>
                     <Inp
-                        value={draft.voodoo?.senderName || ""}
-                        onChange={(e) => setDraft((d) => ({ ...d, voodoo: { ...d.voodoo, senderName: e.target.value.slice(0, 11) } }))}
-                        placeholder="e.g. NudgeHQ"
+                        value={draft.twilio?.from || ""}
+                        onChange={(e) => setDraft((d) => ({ ...d, twilio: { ...d.twilio, from: e.target.value } }))}
+                        placeholder="e.g. +447xxxxxxxxxx or NudgeHQ"
                     />
-                    {draft.voodoo?.senderName && (
+                    {draft.twilio?.from && (
                         <div style={{ fontSize: 11, color: C.pink, marginTop: 4 }}>
-                            Recipients will see "{draft.voodoo.senderName}" as the sender. They cannot reply directly.
+                            Recipients will see "{draft.twilio.from}" as the sender. Alphanumeric senders cannot receive replies.
                         </div>
                     )}
                 </div>

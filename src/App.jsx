@@ -45,8 +45,16 @@ const WF = [
     { id: "pricing", icon: "💷", label: "Pricing & Timetable", desc: "Info pack — 1 message" },
     { id: "info", icon: "ℹ️", label: "General Information", desc: "About us — 2 messages" },
     { id: "followup", icon: "🔔", label: "Follow-up", desc: "Chase no-response — 3 messages" },
+    {
+        id: "appointment",
+        icon: "📆",
+        label: "Appointments",
+        desc: "Confirm + 24h reminder — 2 messages",
+    },
     // NOTE: 'nudge' workflow is triggered internally (intent === "thinking"),
     // so it is intentionally NOT listed here as a selectable option.
+    // NOTE: 'appointment' is driven by the dedicated Appointments tab (it needs
+    // date/time inputs), so it is filtered out of the New Enquiry workflow picker.
 ];
 
 const STEPS = {
@@ -75,6 +83,10 @@ const STEPS = {
         { key: "n1", label: "Initial Message — Thinking About It", timing: "Send immediately after call, or within 24hrs" },
         { key: "n2", label: "Follow-up — No Response", timing: "24 hours after n1 if no response" },
         { key: "n3", label: "Final Message", timing: "48-72 hours after n2 — last contact" },
+    ],
+    appointment: [
+        { key: "ap1", label: "Appointment Confirmation", timing: "Send immediately when appointment is booked" },
+        { key: "ap2", label: "24-Hour Reminder", timing: "Automatically sent 24 hours before the appointment" },
     ],
 };
 
@@ -106,6 +118,8 @@ const VARS = [
     { v: "[REG_FEE]", d: "Registration fee amount" },
     { v: "[SUMUP_LINK]", d: "Branch SumUp card payment link" },
     { v: "[SURNAME]", d: "Student surname in capitals" },
+    { v: "[DATE]", d: "Appointment date (Appointments workflow)" },
+    { v: "[TIME]", d: "Appointment time (Appointments workflow)" },
 ];
 
 // ══════════════════════════════════════════════════════
@@ -200,6 +214,12 @@ Qs: [GENERAL_PHONE] | [BRANCH_PHONE] (opening hrs)
 [BUSINESS_NAME] [BRANCH] 📚`,
 
     n3: `Hi [PARENT_NAME], just a final reminder about [STUDENT_NAMES]\'s place at [BUSINESS_NAME] [BRANCH]. We\'d still love to welcome them — if you\'d like to go ahead or have any questions, please give us a call on [GENERAL_PHONE]. Wishing you and your family all the best. [BUSINESS_NAME] [BRANCH] 📚`,
+
+    ap1: `Hi [PARENT_NAME] this is to confirm your appointment at [BUSINESS_NAME] [BRANCH] on [DATE] at [TIME]. Need to reschedule? Call us on [GENERAL_PHONE]
+[BUSINESS_NAME]`,
+
+    ap2: `Hi [PARENT_NAME] we look forward to meeting you tomorrow at [TIME].
+[BUSINESS_NAME]`,
 };
 
 // ══════════════════════════════════════════════════════
@@ -262,7 +282,7 @@ const normalisePhone = (spoken) => {
 };
 
 function computeVars(data, settings) {
-    const { parentName, students, branchId, grandTotal, selectedSlots, payMethod } = data;
+    const { parentName, students, branchId, grandTotal, selectedSlots, payMethod, apptDate, apptTime } = data;
     const branch = settings.branches.find((b) => b.id === branchId) || settings.branches[0];
     const stuArr = students || [];
     const surname = getSurname(stuArr);
@@ -411,6 +431,15 @@ function computeVars(data, settings) {
         CALENDLY_LINE: calendlyLine,
         CALENDLY_SHORT_LINE: calendlyShortLine,
         PACKAGE_DISCUSSED_LINE: pkgDiscussedLine,
+        DATE: apptDate
+            ? new Date(apptDate + "T00:00:00").toLocaleDateString("en-GB", {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+              })
+            : "",
+        TIME: apptTime || "",
     };
 }
 
@@ -1046,6 +1075,51 @@ export default function App() {
         await sSet("nhq_settings", cfg);
     };
 
+    // Auto-send the 24h-before reminder (Step 2, index 1) for any Appointment
+    // enquiry whose reminder window is now due (appointment date - 24h) and
+    // hasn't been sent yet. Runs on mount and every 60s while the app is open.
+    // Requires Twilio to be configured.
+    useEffect(() => {
+        if (!settings) return;
+        const twilio = settings.twilio;
+        const configured = twilio?.accountSid && twilio?.authToken && twilio?.from;
+        const tick = async () => {
+            const now = Date.now();
+            for (const inq of inquiries) {
+                if (inq.workflow !== "appointment" || !inq.apptDate) continue;
+                const apptTs = new Date(inq.apptDate + "T00:00:00").getTime();
+                if (Number.isNaN(apptTs)) continue;
+                const reminderDue = apptTs - 24 * 60 * 60 * 1000; // 24h before
+                const sent = inq.sentSteps || [];
+                if (now >= reminderDue && !sent.includes(1) && configured && inq.phone) {
+                    const msg = (inq.messages || [])[1];
+                    if (!msg) continue;
+                    try {
+                        const res = await fetch("/api/send-sms", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                accountSid: twilio.accountSid,
+                                authToken: twilio.authToken,
+                                from: twilio.from,
+                                toNumber: inq.phone,
+                                body: msg.content,
+                            }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (res.ok && data.success) {
+                            await updateInq(inq.id, { sentSteps: [...sent, 1].sort((a, b) => a - b) });
+                        }
+                    } catch {}
+                }
+            }
+        };
+        tick();
+        const h = setInterval(tick, 60000);
+        return () => clearInterval(h);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [settings, inquiries]);
+
     const pending = inquiries.filter((i) => i.status === "pending" && daysSince(i.createdAt) <= 14);
     const log60 = inquiries.filter((i) => daysSince(i.createdAt) <= 60);
 
@@ -1144,6 +1218,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
     // sendState: { [index]: 'idle' | 'sending' | 'sent' | 'error' }
     const [sendState, setSendState] = useState({});
     const [intent, setIntent] = useState("proceed"); // "proceed" | "thinking"
+    const [apptDate, setApptDate] = useState("");
+    const [apptTime, setApptTime] = useState("");
 
     const branch = settings.branches.find((b) => b.id === branchId) || settings.branches[0];
     const branchSlots = branch?.slots || [];
@@ -1206,10 +1282,14 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
     };
 
     const doGenerate = async () => {
+        if (workflow === "appointment" && (!apptDate || !apptTime.trim())) {
+            alert("Please enter the appointment date and time.");
+            return;
+        }
         const effectiveWorkflow = intent === "thinking" ? "nudge" : workflow;
         const msgs = generateMsgs(
             effectiveWorkflow,
-            { parentName, students, branchId, grandTotal, selectedSlots, payMethod },
+            { parentName, students, branchId, grandTotal, selectedSlots, payMethod, apptDate, apptTime },
             templates,
             settings,
         );
@@ -1235,6 +1315,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 students,
                 grandTotal,
                 payMethod,
+                apptDate,
+                apptTime,
                 sentSteps: validSent,
             });
         } else {
@@ -1253,6 +1335,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                 students,
                 grandTotal,
                 payMethod,
+                apptDate,
+                apptTime,
                 messages: msgs,
                 sentSteps: [],
             });
@@ -1271,6 +1355,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
         setSelected([]);
         setPayMethod("sumup");
         setIntent("proceed");
+        setApptDate("");
+        setApptTime("");
         setInqId(null);
         setSentSteps([]);
         setSendState({});
@@ -1351,7 +1437,26 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                     <VField label="Name" value={parentName} onChange={setParentName} placeholder="e.g. Mrs Ahmed" />
                     <VField label="Mobile Number" value={phone} onChange={setPhone} placeholder="07700 900000" isPhone />
                 </Card>
-                {workflow !== "pricing" && workflow !== "info" && (
+                {workflow === "appointment" && (
+                    <Card>
+                        <ST>Appointment</ST>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <div style={{ flex: 1 }}>
+                                <Lbl>Date</Lbl>
+                                <Inp type="date" value={apptDate} onChange={(e) => setApptDate(e.target.value)} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <Lbl>Time</Lbl>
+                                <Inp value={apptTime} onChange={(e) => setApptTime(e.target.value)} placeholder="e.g. 3:00pm" />
+                            </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: C.muted }}>
+                            The confirmation message is sent immediately (tap Send SMS on Step 1 below). The 24-hour reminder is sent
+                            automatically while the app is open.
+                        </div>
+                    </Card>
+                )}
+                {workflow !== "pricing" && workflow !== "info" && workflow !== "appointment" && (
                     <Card>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <ST>Students</ST>
@@ -1767,8 +1872,8 @@ function NewTab({ onSave, onUpdate, templates, settings }) {
                     marginBottom: 12,
                 }}
             >
-                💬 <strong>Send via Twilio:</strong> add your Twilio Account SID, Auth Token and From number in Settings, then tap <em>Send SMS</em> on any
-                message above. Sent steps are marked automatically.
+                💬 <strong>Send via Twilio:</strong> add your Twilio Account SID, Auth Token and From number in Settings, then tap{" "}
+                <em>Send SMS</em> on any message above. Sent steps are marked automatically.
             </div>
             <Btn variant="ghost" style={{ width: "100%", padding: 12, marginBottom: 8 }} onClick={doGenerate}>
                 ↺ Regenerate
@@ -2005,8 +2110,7 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
                                                         border: "none",
                                                         borderRadius: 6,
                                                         padding: "3px 9px",
-                                                        cursor:
-                                                            sendState[`${inq.id}:${i}`] === "sending" ? "default" : "pointer",
+                                                        cursor: sendState[`${inq.id}:${i}`] === "sending" ? "default" : "pointer",
                                                         background:
                                                             sendState[`${inq.id}:${i}`] === "error"
                                                                 ? "#FEE2E2"
@@ -2030,9 +2134,7 @@ function PendingTab({ inquiries, onUpdate, settings, templates }) {
                                                             ? "✓ Sent · Resend"
                                                             : "Send SMS"}
                                                 </button>
-                                                <span style={{ fontSize: 9, color: C.muted }}>
-                                                    checkbox = manually mark sent only
-                                                </span>
+                                                <span style={{ fontSize: 9, color: C.muted }}>checkbox = manually mark sent only</span>
                                             </div>
                                         </div>
                                     </div>
@@ -2350,6 +2452,7 @@ function TplTab({ templates, onSave }) {
         { label: "💷 Pricing", steps: STEPS.pricing },
         { label: "ℹ️ General Info", steps: STEPS.info },
         { label: "🔔 Follow-up", steps: STEPS.followup },
+        { label: "📆 Appointments", steps: STEPS.appointment },
     ];
     return (
         <>
@@ -2802,7 +2905,8 @@ function SettingsTab({ settings, onSave }) {
                         lineHeight: 1.6,
                     }}
                 >
-                    Each business uses their own Twilio account. Sign up at twilio.com, copy your Account SID and Auth Token from the console, and set up a phone number (or alphanumeric sender ID). Pricing varies by destination.
+                    Each business uses their own Twilio account. Sign up at twilio.com, copy your Account SID and Auth Token from the
+                    console, and set up a phone number (or alphanumeric sender ID). Pricing varies by destination.
                 </div>
                 <div style={{ marginBottom: 12 }}>
                     <Lbl>Account SID</Lbl>
